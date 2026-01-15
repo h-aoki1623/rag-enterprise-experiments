@@ -1,0 +1,8 @@
+{
+  "doc_id": "confidential-001",
+  "tenant_id": "acme-corp",
+  "classification": "confidential",
+  "allowed_roles": ["executive", "board", "legal"],
+  "pii_flag": true,
+  "source": "internal-hr"
+}
