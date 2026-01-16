@@ -24,7 +24,9 @@ src/
     ├── config.py       # Settings class
     ├── models.py       # Pydantic models
     ├── ingest.py       # Document ingestion pipeline
-    └── retrieve.py     # Vector search
+    ├── retrieve.py     # Vector search
+    ├── generate.py     # Answer generation with citations
+    └── prompts.py      # System/user prompt templates
 
 data/docs/              # Source documents (.md + .meta.json)
 ├── public/
@@ -102,7 +104,7 @@ Claude MUST use the following branch prefixes and meanings:
 - All plans created in Plan Mode MUST be persisted to a file.
 - Plan files MUST be created under:
   ```
-  .claude/plans/
+  ./.claude/plans/
   ```
 - File naming convention:
   ```
@@ -140,6 +142,11 @@ python -m src.app ingest
 # Test search
 python -m src.app search "query"
 
+# Ask a question (RAG)
+python -m src.app ask "question"
+python -m src.app ask "question" --json  # JSON output
+python -m src.app ask "question" -H      # Hierarchical retrieval
+
 # Show system info
 python -m src.app info
 
@@ -171,7 +178,7 @@ Each document consists of a `.md` file paired with a `.meta.json` sidecar file:
 ## Implementation Roadmap
 
 1. ✅ **Step 1**: Ingest + Retrieval (no RBAC)
-2. ⬜ **Step 2**: Generation (with citations)
+2. ✅ **Step 2**: Generation (with citations)
 3. ⬜ **Step 3**: RBAC filter (tenant/role)
 4. ⬜ **Step 4**: Audit logging
 5. ⬜ **Step 5**: Failure modes (Injection / Leakage) - reproduce & mitigate

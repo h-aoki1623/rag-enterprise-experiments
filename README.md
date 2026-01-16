@@ -69,7 +69,60 @@ This will:
 python -m src.app search "What is the vacation policy?"
 ```
 
-#### 3. View System Info
+#### 3. Ask Questions (RAG)
+
+```bash
+# Basic question
+python -m src.app ask "What is the vacation policy?"
+
+# JSON output format
+python -m src.app ask "What is the vacation policy?" --json
+
+# Use hierarchical retrieval
+python -m src.app ask "What is the vacation policy?" -H
+
+# Specify number of chunks to retrieve
+python -m src.app ask "What is the vacation policy?" -k 3
+```
+
+Example output:
+```
+============================================================
+Question: What is the vacation policy?
+Retrieval mode: Flat
+Top-k: 5
+============================================================
+
+--- Answer ---
+Employees receive 15 days of paid vacation per year.
+
+Confidence: 0.95
+
+--- Citations ---
+[1] test-internal-001 / test-internal-001-chunk-0
+    "Employees receive 15 days of paid vacation per year."
+
+--- Policy Flags ---
+  - (none)
+```
+
+JSON output format:
+```json
+{
+  "answer": "Employees receive 15 days of paid vacation per year.",
+  "citations": [
+    {
+      "doc_id": "test-internal-001",
+      "chunk_id": "test-internal-001-chunk-0",
+      "text_snippet": "Employees receive 15 days of paid vacation per year."
+    }
+  ],
+  "confidence": 0.95,
+  "policy_flags": []
+}
+```
+
+#### 4. View System Info
 
 ```bash
 python -m src.app info
@@ -85,7 +138,9 @@ rag-enterprise-experiments/
 │       ├── config.py          # Configuration settings
 │       ├── models.py          # Pydantic data models
 │       ├── ingest.py          # Document ingestion pipeline
-│       └── retrieve.py        # Vector search layer
+│       ├── retrieve.py        # Vector search layer
+│       ├── generate.py        # Answer generation with citations
+│       └── prompts.py         # System/user prompt templates
 ├── data/
 │   └── docs/                  # Source documents
 │       ├── public/            # Public documents
@@ -151,6 +206,7 @@ make format
 | `make dev-install` | Install with dev dependencies |
 | `make ingest` | Run document ingestion |
 | `make search Q="query"` | Search with query |
+| `make ask Q="query"` | Ask a question using RAG |
 | `make info` | Show system information |
 | `make test` | Run tests |
 | `make lint` | Run linter |
@@ -160,7 +216,7 @@ make format
 ## Implementation Roadmap
 
 - [x] **Step 1**: Ingest + Retrieval (no RBAC)
-- [ ] **Step 2**: Generation (with citations)
+- [x] **Step 2**: Generation (with citations)
 - [ ] **Step 3**: RBAC filter (tenant/role)
 - [ ] **Step 4**: Audit logging
 - [ ] **Step 5**: Failure modes (Injection / Leakage)
@@ -182,6 +238,20 @@ Documents → Load → Chunk → Embed → FAISS Index
 ```
 Query → Embed → FAISS Search → Top-K Chunks → Results
 ```
+
+### Generation Flow (RAG)
+
+```
+Query → Retrieve Top-K → Build Context → LLM Generation → Structured Response
+                                              ↓
+                                    {answer, citations, confidence, policy_flags}
+```
+
+**Security features:**
+- Prompt injection prevention via system prompt design
+- Mandatory citations for all answers
+- Policy flags for PII/confidential data access visibility
+- Confidence scoring for answer reliability
 
 ## Security Considerations
 

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m src.app:*)",
+      "Bash(git init:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial implementation: Ingest + Retrieval \\(Step 1\\)\n\n- Add document ingestion pipeline with chunking and embedding\n- Add FAISS-based vector retrieval\n- Add Pydantic models for documents, chunks, and metadata\n- Add CLI entry point \\(ingest, search, info commands\\)\n- Add sample documents \\(public, internal, confidential\\)\n- Add comprehensive test suite \\(52 tests\\)\n- Add project configuration \\(pyproject.toml, Makefile\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(make lint:*)",
+      "Bash(make test:*)",
+      "Bash(pytest:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\ndocs: Add mandatory development workflow rules to CLAUDE.md\n\nAdd comprehensive development workflow rules including:\n- Allowed/disallowed commands for security\n- Branching rules requiring feature branches \\(never work on main\\)\n- Branch naming conventions \\(feature/, fix/, docs/, spec/\\)\n- Restrictions by branch type\n- Planning rules requiring plans to be persisted in .claude/plans/\n- Testing rules requiring all tests to pass before completion\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(cd /Users/wa/Workspace/Anthropic\\\\ Interiew\\\\ Prep/rag-enterprise-experiments && git checkout:*)",
+      "Bash(ruff check:*)"
+    ]
+  }
+}

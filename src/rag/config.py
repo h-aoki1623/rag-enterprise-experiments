@@ -87,10 +87,22 @@ class Settings(BaseSettings):
         description="Document store JSON file name",
     )
 
-    # Anthropic API (for future generation step)
+    # Anthropic API settings
     anthropic_api_key: str = Field(
         default="",
         description="Anthropic API key",
+    )
+    anthropic_model: str = Field(
+        default="claude-3-5-haiku-20241022",
+        description="Anthropic model to use for generation",
+    )
+    generation_max_tokens: int = Field(
+        default=1024,
+        description="Maximum tokens for generation",
+    )
+    generation_temperature: float = Field(
+        default=0.0,
+        description="Temperature for generation (0.0 for deterministic)",
     )
 
     class Config:

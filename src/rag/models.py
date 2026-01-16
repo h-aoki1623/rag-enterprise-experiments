@@ -14,6 +14,15 @@ class Classification(str, Enum):
     CONFIDENTIAL = "confidential"
 
 
+class PolicyFlag(str, Enum):
+    """Policy flags for generation results."""
+
+    NO_CONTEXT = "no_context"  # No basis in documents
+    PII_REFERENCED = "pii_referenced"  # Referenced PII-containing data
+    CONFIDENTIAL = "confidential"  # Referenced confidential document
+    UNCERTAIN = "uncertain"  # Low confidence in answer
+
+
 class ChunkLevel(str, Enum):
     """Hierarchy level of a chunk."""
 
@@ -90,3 +99,21 @@ class Document(BaseModel):
     content: str = Field(..., description="Full document content")
     metadata: DocumentMetadata = Field(..., description="Document metadata")
     file_path: Optional[str] = Field(default=None, description="Original file path")
+
+
+class Citation(BaseModel):
+    """Citation information for a generated answer."""
+
+    doc_id: str = Field(..., description="Document ID")
+    chunk_id: str = Field(..., description="Chunk ID")
+    text_snippet: str = Field(..., description="Excerpt from the source for verification")
+
+
+class GenerationResult(BaseModel):
+    """Result from answer generation."""
+
+    answer: str = Field(..., description="Generated answer text")
+    citations: list[Citation] = Field(default_factory=list, description="List of citations")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score (0.0-1.0)")
+    policy_flags: list[PolicyFlag] = Field(default_factory=list, description="Policy flags")
+    raw_context_used: bool = Field(default=True, description="Whether raw context was used")

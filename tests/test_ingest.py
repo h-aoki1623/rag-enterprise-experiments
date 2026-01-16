@@ -1,11 +1,8 @@
 """Tests for document ingestion pipeline."""
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from src.rag.ingest import (
     build_index,
@@ -14,7 +11,7 @@ from src.rag.ingest import (
     ingest_all,
     load_documents,
 )
-from src.rag.models import Chunk, Classification, Document, DocumentMetadata
+from src.rag.models import Chunk, Classification, Document
 
 
 class TestLoadDocuments:
@@ -41,7 +38,9 @@ class TestLoadDocuments:
         documents = load_documents(sample_docs_dir)
 
         # Find the internal document
-        internal_docs = [d for d in documents if d.metadata.classification == Classification.INTERNAL]
+        internal_docs = [
+            d for d in documents if d.metadata.classification == Classification.INTERNAL
+        ]
         assert len(internal_docs) == 1
         assert "Vacation Policy" in internal_docs[0].content
         assert "15 days" in internal_docs[0].content
@@ -185,6 +184,7 @@ class TestEmbedChunks:
     def test_embed_chunks_with_provided_model(self, sample_docs_dir):
         """Test embedding with pre-loaded model."""
         from sentence_transformers import SentenceTransformer
+
         from src.rag.config import settings
 
         documents = load_documents(sample_docs_dir)
