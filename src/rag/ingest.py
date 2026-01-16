@@ -1,7 +1,6 @@
 """Document ingestion pipeline: load, chunk, embed, and index."""
 
 import json
-import uuid
 from pathlib import Path
 
 import faiss
@@ -10,7 +9,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 
 from .config import settings
-from .models import Chunk, Document, DocumentMetadata
+from .hierarchy import chunk_documents_hierarchical
+from .models import Chunk, Document, DocumentMetadata, HierarchicalChunk
 
 
 def load_documents(docs_dir: Path | None = None) -> list[Document]:
@@ -122,7 +122,7 @@ def embed_chunks(chunks: list[Chunk], model: SentenceTransformer | None = None) 
 
 def build_index(embeddings: np.ndarray, chunks: list[Chunk]) -> None:
     """
-    Build FAISS index and save docstore.
+    Build FAISS index and save docstore (flat chunking mode).
 
     Args:
         embeddings: Numpy array of embeddings.
@@ -143,13 +143,15 @@ def build_index(embeddings: np.ndarray, chunks: list[Chunk]) -> None:
     faiss.write_index(index, str(settings.faiss_index_path))
     print(f"Saved FAISS index to {settings.faiss_index_path}")
 
-    # Build and save docstore
+    # Build and save docstore (v1 format for flat chunking)
     docstore = {
+        "version": "1.0",
         "chunks": [chunk.model_dump() for chunk in chunks],
         "metadata": {
             "total_chunks": len(chunks),
             "embedding_model": settings.embedding_model,
             "embedding_dimension": dimension,
+            "hierarchy_enabled": False,
         },
     }
 
@@ -158,40 +160,147 @@ def build_index(embeddings: np.ndarray, chunks: list[Chunk]) -> None:
     print(f"Saved docstore to {settings.docstore_path}")
 
 
-def ingest_all(docs_dir: Path | None = None) -> dict:
+def build_hierarchical_index(
+    embeddings: np.ndarray,
+    parents: list[HierarchicalChunk],
+    children: list[HierarchicalChunk],
+) -> None:
+    """
+    Build FAISS index and save hierarchical docstore.
+
+    Only children are indexed in FAISS for retrieval.
+    Parents are stored for context resolution.
+
+    Args:
+        embeddings: Numpy array of embeddings for children.
+        parents: List of parent chunks.
+        children: List of child chunks corresponding to embeddings.
+    """
+    # Ensure index directory exists
+    settings.index_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build FAISS index (children only)
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
+
+    # Normalize embeddings for cosine similarity
+    faiss.normalize_L2(embeddings)
+    index.add(embeddings)
+
+    # Save FAISS index
+    faiss.write_index(index, str(settings.faiss_index_path))
+    print(f"Saved FAISS index to {settings.faiss_index_path}")
+
+    # Build and save hierarchical docstore (v2 format)
+    docstore = {
+        "version": "2.0",
+        "chunks": {
+            "parents": [p.model_dump() for p in parents],
+            "children": [c.model_dump() for c in children],
+        },
+        "index_mapping": {str(i): children[i].chunk_id for i in range(len(children))},
+        "metadata": {
+            "total_parents": len(parents),
+            "total_children": len(children),
+            "embedding_model": settings.embedding_model,
+            "embedding_dimension": dimension,
+            "parent_chunk_size": settings.parent_chunk_size,
+            "child_chunk_size": settings.child_chunk_size,
+            "hierarchy_enabled": True,
+        },
+    }
+
+    with open(settings.docstore_path, "w", encoding="utf-8") as f:
+        json.dump(docstore, f, indent=2, ensure_ascii=False)
+    print(f"Saved hierarchical docstore to {settings.docstore_path}")
+
+
+def embed_hierarchical_chunks(
+    children: list[HierarchicalChunk], model: SentenceTransformer | None = None
+) -> np.ndarray:
+    """
+    Generate embeddings for child chunks (only children are embedded).
+
+    Args:
+        children: List of child chunks to embed.
+        model: Optional pre-loaded model. If None, loads from settings.
+
+    Returns:
+        Numpy array of embeddings with shape (num_children, embedding_dim).
+    """
+    if model is None:
+        print(f"Loading embedding model: {settings.embedding_model}")
+        model = SentenceTransformer(settings.embedding_model)
+
+    texts = [child.text for child in children]
+    print(f"Generating embeddings for {len(texts)} child chunks...")
+
+    embeddings = model.encode(texts, show_progress_bar=True, convert_to_numpy=True)
+    return embeddings
+
+
+def ingest_all(docs_dir: Path | None = None, use_hierarchy: bool | None = None) -> dict:
     """
     Run full ingestion pipeline.
 
     Args:
         docs_dir: Optional directory containing documents.
+        use_hierarchy: Whether to use hierarchical chunking.
+                       If None, uses settings.hierarchy_enabled.
 
     Returns:
         Statistics about the ingestion.
     """
+    # Determine chunking mode
+    if use_hierarchy is None:
+        use_hierarchy = settings.hierarchy_enabled
+
     # Load documents
     documents = load_documents(docs_dir)
     if not documents:
         print("No documents found to ingest")
         return {"documents": 0, "chunks": 0}
 
-    # Chunk documents
-    chunks = chunk_documents(documents)
-
     # Load embedding model once
     model = SentenceTransformer(settings.embedding_model)
 
-    # Generate embeddings
-    embeddings = embed_chunks(chunks, model)
+    if use_hierarchy:
+        # Hierarchical chunking
+        print("Using hierarchical chunking...")
+        parents, children = chunk_documents_hierarchical(documents)
 
-    # Build and save index
-    build_index(embeddings, chunks)
+        # Generate embeddings for children only
+        embeddings = embed_hierarchical_chunks(children, model)
 
-    stats = {
-        "documents": len(documents),
-        "chunks": len(chunks),
-        "index_path": str(settings.faiss_index_path),
-        "docstore_path": str(settings.docstore_path),
-    }
+        # Build hierarchical index
+        build_hierarchical_index(embeddings, parents, children)
+
+        stats = {
+            "documents": len(documents),
+            "parents": len(parents),
+            "children": len(children),
+            "hierarchy_enabled": True,
+            "index_path": str(settings.faiss_index_path),
+            "docstore_path": str(settings.docstore_path),
+        }
+    else:
+        # Flat chunking (legacy mode)
+        print("Using flat chunking...")
+        chunks = chunk_documents(documents)
+
+        # Generate embeddings
+        embeddings = embed_chunks(chunks, model)
+
+        # Build flat index
+        build_index(embeddings, chunks)
+
+        stats = {
+            "documents": len(documents),
+            "chunks": len(chunks),
+            "hierarchy_enabled": False,
+            "index_path": str(settings.faiss_index_path),
+            "docstore_path": str(settings.docstore_path),
+        }
 
     print(f"\nIngestion complete: {stats}")
     return stats

@@ -7,23 +7,30 @@ from pathlib import Path
 
 from src.rag.config import settings
 from src.rag.ingest import ingest_all
-from src.rag.retrieve import retrieve_with_debug
+from src.rag.retrieve import retrieve_hierarchical_with_debug, retrieve_with_debug
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
     """Run document ingestion pipeline."""
     docs_dir = Path(args.docs_dir) if args.docs_dir else None
+    use_hierarchy = not args.flat  # --flat disables hierarchy
 
     print("=" * 60)
     print("Starting document ingestion...")
+    print(f"Mode: {'Flat' if args.flat else 'Hierarchical'} chunking")
     print("=" * 60)
 
     try:
-        stats = ingest_all(docs_dir)
+        stats = ingest_all(docs_dir, use_hierarchy=use_hierarchy)
         print("\n" + "=" * 60)
         print("Ingestion Summary:")
         print(f"  Documents: {stats['documents']}")
-        print(f"  Chunks: {stats['chunks']}")
+        if stats.get("hierarchy_enabled"):
+            print(f"  Parent chunks: {stats.get('parents', 0)}")
+            print(f"  Child chunks: {stats.get('children', 0)}")
+        else:
+            print(f"  Chunks: {stats.get('chunks', 0)}")
+        print(f"  Hierarchy: {'Enabled' if stats.get('hierarchy_enabled') else 'Disabled'}")
         print(f"  Index: {stats.get('index_path', 'N/A')}")
         print("=" * 60)
         return 0
@@ -36,23 +43,63 @@ def cmd_search(args: argparse.Namespace) -> int:
     """Search for documents matching a query."""
     query = args.query
     k = args.k
+    use_hierarchy = args.hierarchical
 
     print("=" * 60)
     print(f"Query: {query}")
     print(f"Top-k: {k}")
+    print(f"Mode: {'Hierarchical' if use_hierarchy else 'Flat'}")
     print("=" * 60)
 
     try:
-        results = retrieve_with_debug(query, k)
+        if use_hierarchy:
+            include_full = args.full if hasattr(args, "full") else False
+            results = retrieve_hierarchical_with_debug(
+                query, k * 3, return_parents=k, include_full_parent=include_full
+            )
+            print(f"\nFound {results['num_results']} parent chunks:\n")
 
-        print(f"\nFound {results['num_results']} results:\n")
+            for r in results["results"]:
+                print(f"[{r['rank']}] Aggregate Score: {r['aggregate_score']:.4f}")
+                print("    Parent:")
+                print(f"    Parent Chunk ID: {r['parent']['chunk_id']}")
+                print(f"    Section Header: {r['parent']['section_header']}")
+                print(f"    Doc: {r['parent']['doc_id']} ({r['parent']['classification']})")
+                print(f"    Full text: {r['parent']['full_text_length']} chars")
+                print()
+                # Show preview (Stage 1)
+                print("    [Preview]")
+                for line in r["parent"]["preview"].split("\n")[:10]:
+                    print(f"    {line}")
+                print()
+                # Show full text if requested (Stage 2)
+                if include_full and r["parent"]["full_text"]:
+                    print("    [Full Context]")
+                    for line in r["parent"]["full_text"].split("\n"):
+                        print(f"    {line}")
+                    print()
+                print("    Matched children:")
+                for child in r["matched_children"]:
+                    print(f"      - [{child['score']:.4f}] {child['section_header']}")
+                    # Show child text (truncated for display)
+                    print("        [Preview]")
+                    child_preview = (
+                        child["text"][:200] + "..." if len(child["text"]) > 200 else child["text"]
+                    )
+                    for line in child_preview.split("\n")[:5]:
+                        print(f"        {line}")
+                print()
+        else:
+            results = retrieve_with_debug(query, k)
+            print(f"\nFound {results['num_results']} results:\n")
 
-        for r in results["results"]:
-            print(f"[{r['rank']}] Score: {r['score']:.4f}")
-            print(f"    Chunk: {r['chunk_id']}")
-            print(f"    Doc: {r['doc_id']} ({r['classification']})")
-            print(f"    Text: {r['text_preview']}")
-            print()
+            for r in results["results"]:
+                print(f"[{r['rank']}] Score: {r['score']:.4f}")
+                print(f"    Chunk: {r['chunk_id']}")
+                print(f"    Doc: {r['doc_id']} ({r['classification']})")
+                print("    [Preview]")
+                print(f"    Text: {r['text_preview']}")
+                print()
 
         if args.json:
             print("\n--- JSON Output ---")
@@ -74,31 +121,43 @@ def cmd_info(args: argparse.Namespace) -> int:
     print("RAG System Information")
     print("=" * 60)
 
-    print(f"\nConfiguration:")
+    print("\nConfiguration:")
     print(f"  Embedding model: {settings.embedding_model}")
-    print(f"  Chunk size: {settings.chunk_size} chars")
-    print(f"  Chunk overlap: {settings.chunk_overlap} chars")
+    print(f"  Hierarchy enabled: {settings.hierarchy_enabled}")
+    print(f"  Flat chunk size: {settings.chunk_size} chars")
+    print(f"  Flat chunk overlap: {settings.chunk_overlap} chars")
+    print(f"  Parent chunk size: {settings.parent_chunk_size} chars")
+    print(f"  Child chunk size: {settings.child_chunk_size} chars")
+    print(f"  Child chunk overlap: {settings.child_chunk_overlap} chars")
     print(f"  Default top-k: {settings.default_top_k}")
     print(f"  Max top-k: {settings.max_top_k}")
 
-    print(f"\nPaths:")
+    print("\nPaths:")
     print(f"  Docs directory: {settings.docs_dir}")
     print(f"  Index directory: {settings.index_dir}")
 
     # Check if index exists
-    print(f"\nIndex Status:")
+    print("\nIndex Status:")
     if settings.faiss_index_path.exists():
         print(f"  FAISS index: {settings.faiss_index_path} (exists)")
     else:
-        print(f"  FAISS index: Not created (run 'ingest' first)")
+        print("  FAISS index: Not created (run 'ingest' first)")
 
     if settings.docstore_path.exists():
         with open(settings.docstore_path) as f:
             docstore = json.load(f)
+        version = docstore.get("version", "1.0")
         print(f"  Docstore: {settings.docstore_path}")
-        print(f"    Total chunks: {docstore['metadata']['total_chunks']}")
+        print(f"    Version: {version}")
+        if version == "2.0":
+            print("    Mode: Hierarchical")
+            print(f"    Total parents: {docstore['metadata'].get('total_parents', 0)}")
+            print(f"    Total children: {docstore['metadata'].get('total_children', 0)}")
+        else:
+            print("    Mode: Flat")
+            print(f"    Total chunks: {docstore['metadata'].get('total_chunks', 0)}")
     else:
-        print(f"  Docstore: Not created (run 'ingest' first)")
+        print("  Docstore: Not created (run 'ingest' first)")
 
     return 0
 
@@ -119,6 +178,11 @@ def main() -> int:
         type=str,
         help="Directory containing documents (default: data/docs)",
     )
+    ingest_parser.add_argument(
+        "--flat",
+        action="store_true",
+        help="Use flat chunking instead of hierarchical chunking",
+    )
 
     # Search command
     search_parser = subparsers.add_parser("search", help="Search the document index")
@@ -133,6 +197,18 @@ def main() -> int:
         "--json",
         action="store_true",
         help="Output results as JSON",
+    )
+    search_parser.add_argument(
+        "--hierarchical",
+        "-H",
+        action="store_true",
+        help="Use hierarchical retrieval (returns parent chunks with matched children)",
+    )
+    search_parser.add_argument(
+        "--full",
+        "-F",
+        action="store_true",
+        help="Include full parent context (Stage 2) in hierarchical results",
     )
 
     # Info command

@@ -1,6 +1,5 @@
 """Configuration settings for RAG system."""
 
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,7 +25,7 @@ class Settings(BaseSettings):
         description="Embedding vector dimension (384 for MiniLM)",
     )
 
-    # Chunking settings
+    # Chunking settings (flat chunking)
     chunk_size: int = Field(
         default=1500,
         description="Target chunk size in characters (~500 tokens)",
@@ -34,6 +33,28 @@ class Settings(BaseSettings):
     chunk_overlap: int = Field(
         default=150,
         description="Overlap between chunks in characters",
+    )
+
+    # Hierarchical chunking settings
+    hierarchy_enabled: bool = Field(
+        default=True,
+        description="Enable hierarchical chunking (parent-child structure)",
+    )
+    parent_chunk_size: int = Field(
+        default=3000,
+        description="Parent chunk size in characters (~1000 tokens)",
+    )
+    child_chunk_size: int = Field(
+        default=500,
+        description="Child chunk size in characters (~165 tokens)",
+    )
+    child_chunk_overlap: int = Field(
+        default=50,
+        description="Overlap between child chunks in characters",
+    )
+    parent_preview_size: int = Field(
+        default=500,
+        description="Initial preview size for parent context (chars)",
     )
 
     # Retrieval settings
