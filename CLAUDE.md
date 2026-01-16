@@ -35,6 +35,99 @@ indexes/                # FAISS index + docstore.json
 tests/                  # pytest tests
 ```
 
+## Allowed Commands
+- git status
+- git diff
+- git log
+- git branch
+- git show
+- python *
+- pytest *
+- poetry *
+- pip *
+
+## Disallowed Commands
+- sudo *
+- shutdown *
+
+## Mandatory Development Workflow Rules
+
+### Branching Rules (MUST)
+
+- If the current git branch is `main`, Claude MUST:
+  1. Create a new branch following the naming conventions below
+  2. Switch to that branch
+  3. Only then start planning or implementation
+
+- Claude MUST NEVER start planning or implementation work directly on `main`.
+
+
+### Branch Naming Conventions
+
+Claude MUST use the following branch prefixes and meanings:
+
+- **feature/**  
+  General feature development.  
+  Includes:
+  - Application logic
+  - Test implementation
+  - Infrastructure or CDK-related implementation
+
+- **fix/**  
+  Bug fixes intended to be released as hotfixes.
+
+- **docs/**  
+  Documentation updates only.  
+  Includes:
+  - CLAUDE.md
+  - README.md
+  - Any other documentation files
+
+- **spec/**  
+  Specification or proposal work ONLY.
+  - MUST NOT include any implementation code
+  - Used for specifications, design documents, or proposals
+
+#### Restrictions by Branch Type
+
+- **spec/** branches:
+  - Claude MUST NOT write or modify any implementation code
+  - Only documentation files may be changed
+
+- **docs/** branches:
+  - Claude MUST NOT modify application logic
+
+### Planning Rules (Plan Mode)
+
+- All plans created in Plan Mode MUST be persisted to a file.
+- Plan files MUST be created under:
+  ```
+  .claude/plans/
+  ```
+- File naming convention:
+  ```
+  plan-<scope>.md
+  ```
+- Plans MUST be:
+  - Step-by-step
+  - Explicit
+  - Implementation-ready
+
+Claude MUST NOT rely solely on chat output for planning.
+
+### Testing Rules (MUST)
+
+- After implementation, Claude MUST:
+  1. Create appropriate test code
+  2. Place all tests under:
+     ```
+     tests/
+     ```
+  3. Execute the test suite
+
+- Claude MUST repeat fixing and testing until **all tests pass**.
+- Claude MUST NOT declare a task complete while any test is failing.
+
 ## Common Commands
 
 ```bash
