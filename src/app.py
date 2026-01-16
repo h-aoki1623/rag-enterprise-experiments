@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from src.rag.config import settings
+from src.rag.generate import generate_with_retrieval
 from src.rag.ingest import ingest_all
 from src.rag.retrieve import retrieve_hierarchical_with_debug, retrieve_with_debug
 
@@ -162,6 +163,75 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ask(args: argparse.Namespace) -> int:
+    """Ask a question using RAG."""
+    question = args.question
+    k = args.k
+    use_hierarchical = args.hierarchical
+
+    print("=" * 60)
+    print(f"Question: {question}")
+    print(f"Retrieval mode: {'Hierarchical' if use_hierarchical else 'Flat'}")
+    print(f"Top-k: {k}")
+    print("=" * 60)
+
+    try:
+        result = generate_with_retrieval(
+            query=question,
+            k=k,
+            use_hierarchical=use_hierarchical,
+        )
+
+        if args.json:
+            print("\n--- JSON Output ---")
+            output = {
+                "answer": result.answer,
+                "citations": [
+                    {
+                        "doc_id": c.doc_id,
+                        "chunk_id": c.chunk_id,
+                        "text_snippet": c.text_snippet,
+                    }
+                    for c in result.citations
+                ],
+                "confidence": result.confidence,
+                "policy_flags": [f.value for f in result.policy_flags],
+            }
+            print(json.dumps(output, indent=2, ensure_ascii=False))
+        else:
+            print("\n--- Answer ---")
+            print(result.answer)
+            print(f"\nConfidence: {result.confidence:.2f}")
+
+            if result.citations:
+                print("\n--- Citations ---")
+                for i, c in enumerate(result.citations, 1):
+                    print(f"[{i}] {c.doc_id} / {c.chunk_id}")
+                    if len(c.text_snippet) > 100:
+                        snippet = c.text_snippet[:100] + "..."
+                    else:
+                        snippet = c.text_snippet
+                    print(f"    \"{snippet}\"")
+
+            if result.policy_flags:
+                print("\n--- Policy Flags ---")
+                for flag in result.policy_flags:
+                    print(f"  - {flag.value}")
+
+        return 0
+
+    except FileNotFoundError as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        print("Run 'python -m src.app ingest' first to create the index.", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"\nConfiguration Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\nError during generation: {e}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -214,6 +284,27 @@ def main() -> int:
     # Info command
     subparsers.add_parser("info", help="Show system information")
 
+    # Ask command
+    ask_parser = subparsers.add_parser("ask", help="Ask a question using RAG")
+    ask_parser.add_argument("question", type=str, help="Question to ask")
+    ask_parser.add_argument(
+        "-k",
+        type=int,
+        default=settings.default_top_k,
+        help=f"Number of chunks to retrieve (default: {settings.default_top_k})",
+    )
+    ask_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output result as JSON",
+    )
+    ask_parser.add_argument(
+        "--hierarchical",
+        "-H",
+        action="store_true",
+        help="Use hierarchical retrieval",
+    )
+
     args = parser.parse_args()
 
     if args.command == "ingest":
@@ -222,6 +313,8 @@ def main() -> int:
         return cmd_search(args)
     elif args.command == "info":
         return cmd_info(args)
+    elif args.command == "ask":
+        return cmd_ask(args)
     else:
         parser.print_help()
         return 0

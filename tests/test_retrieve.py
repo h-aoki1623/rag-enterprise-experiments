@@ -1,18 +1,12 @@
 """Tests for retrieval layer."""
 
-import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import faiss
 import numpy as np
 import pytest
 
 from src.rag.ingest import build_index, chunk_documents, embed_chunks, load_documents
 from src.rag.models import Chunk, Classification, RetrievalResult
 from src.rag.retrieve import (
-    _chunks,
-    _index,
     embed_query,
     get_model,
     load_index,
@@ -24,8 +18,8 @@ from src.rag.retrieve import (
 @pytest.fixture
 def indexed_data(sample_docs_dir, sample_index_dir):
     """Create a complete index from sample documents."""
-    from src.rag.config import settings
     import src.rag.retrieve as retrieve_module
+    from src.rag.config import settings
 
     original_index_dir = settings.index_dir
     settings.index_dir = sample_index_dir
@@ -105,8 +99,8 @@ class TestLoadIndex:
 
     def test_load_index_file_not_found(self, sample_index_dir):
         """Test error when index files don't exist."""
-        from src.rag.config import settings
         import src.rag.retrieve as retrieve_module
+        from src.rag.config import settings
 
         original_index_dir = settings.index_dir
         settings.index_dir = sample_index_dir
