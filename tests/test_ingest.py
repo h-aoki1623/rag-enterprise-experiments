@@ -281,9 +281,16 @@ class TestIngestAll:
             stats = ingest_all(sample_docs_dir)
 
             assert "documents" in stats
-            assert "chunks" in stats
             assert stats["documents"] == 3
-            assert stats["chunks"] > 0
+            # Check for either flat or hierarchical chunking output
+            if stats.get("hierarchy_enabled"):
+                assert "parents" in stats
+                assert "children" in stats
+                assert stats["parents"] > 0
+                assert stats["children"] > 0
+            else:
+                assert "chunks" in stats
+                assert stats["chunks"] > 0
         finally:
             settings.index_dir = original_index_dir
 

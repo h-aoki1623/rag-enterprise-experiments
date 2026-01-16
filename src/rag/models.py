@@ -14,6 +14,13 @@ class Classification(str, Enum):
     CONFIDENTIAL = "confidential"
 
 
+class ChunkLevel(str, Enum):
+    """Hierarchy level of a chunk."""
+
+    PARENT = "parent"
+    CHILD = "child"
+
+
 class DocumentMetadata(BaseModel):
     """Metadata for a document."""
 
@@ -36,12 +43,45 @@ class Chunk(BaseModel):
     metadata: DocumentMetadata = Field(..., description="Inherited document metadata")
 
 
+class HierarchicalChunk(BaseModel):
+    """A chunk with hierarchy relationships for hierarchical chunking."""
+
+    chunk_id: str = Field(..., description="Unique chunk identifier")
+    text: str = Field(..., description="Chunk text content")
+    doc_id: str = Field(..., description="Root document ID")
+    metadata: DocumentMetadata = Field(..., description="Inherited document metadata")
+    level: ChunkLevel = Field(..., description="Hierarchy level of this chunk")
+    parent_id: Optional[str] = Field(
+        default=None, description="ID of parent chunk (None for parent-level chunks)"
+    )
+    children_ids: list[str] = Field(
+        default_factory=list, description="IDs of child chunks (empty for child-level)"
+    )
+    section_header: Optional[str] = Field(
+        default=None, description="Section header if this is a parent chunk"
+    )
+
+
 class RetrievalResult(BaseModel):
     """Result from retrieval with relevance score."""
 
     chunk: Chunk = Field(..., description="Retrieved chunk")
     score: float = Field(..., description="Relevance score (higher is more relevant)")
     rank: int = Field(..., description="Rank in retrieval results (1-indexed)")
+
+
+class HierarchicalRetrievalResult(BaseModel):
+    """Result from hierarchical retrieval with parent context."""
+
+    parent_chunk: HierarchicalChunk = Field(..., description="Parent chunk for context")
+    matched_children: list[HierarchicalChunk] = Field(
+        default_factory=list, description="Child chunks that matched the query"
+    )
+    child_scores: list[float] = Field(
+        default_factory=list, description="Relevance scores for each matched child"
+    )
+    aggregate_score: float = Field(..., description="Combined relevance score")
+    rank: int = Field(..., description="Rank in results (1-indexed)")
 
 
 class Document(BaseModel):

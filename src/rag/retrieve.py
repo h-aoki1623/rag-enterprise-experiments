@@ -1,24 +1,28 @@
 """Retrieval layer for vector search."""
 
 import json
-from pathlib import Path
 
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from .config import settings
-from .models import Chunk, RetrievalResult
+from .models import Chunk, HierarchicalChunk, HierarchicalRetrievalResult, RetrievalResult
 
 # Module-level cache for loaded resources
 _index: faiss.Index | None = None
 _chunks: list[Chunk] | None = None
 _model: SentenceTransformer | None = None
 
+# Hierarchical chunking cache
+_parents: dict[str, HierarchicalChunk] | None = None
+_children: list[HierarchicalChunk] | None = None
+_is_hierarchical: bool | None = None
+
 
 def load_index(force_reload: bool = False) -> tuple[faiss.Index, list[Chunk]]:
     """
-    Load FAISS index and docstore from disk.
+    Load FAISS index and docstore from disk (flat chunking mode).
 
     Args:
         force_reload: If True, reload even if already cached.
@@ -52,10 +56,84 @@ def load_index(force_reload: bool = False) -> tuple[faiss.Index, list[Chunk]]:
     with open(settings.docstore_path, encoding="utf-8") as f:
         docstore = json.load(f)
 
-    _chunks = [Chunk(**chunk_data) for chunk_data in docstore["chunks"]]
+    # Handle v1 and v2 formats for backward compatibility
+    version = docstore.get("version", "1.0")
+    if version == "2.0":
+        # V2: hierarchical format - extract children as flat chunks for compatibility
+        _chunks = [Chunk(**c) for c in docstore["chunks"]["children"]]
+    else:
+        # V1: flat format
+        _chunks = [Chunk(**chunk_data) for chunk_data in docstore["chunks"]]
     print(f"Loaded {len(_chunks)} chunks from docstore")
 
     return _index, _chunks
+
+
+def load_hierarchical_index(
+    force_reload: bool = False,
+) -> tuple[faiss.Index, dict[str, HierarchicalChunk], list[HierarchicalChunk], bool]:
+    """
+    Load FAISS index and hierarchical docstore from disk.
+
+    Args:
+        force_reload: If True, reload even if already cached.
+
+    Returns:
+        Tuple of (FAISS index, parents dict, children list, is_hierarchical).
+
+    Raises:
+        FileNotFoundError: If index files don't exist.
+    """
+    global _index, _parents, _children, _is_hierarchical
+
+    if (
+        _index is not None
+        and _parents is not None
+        and _children is not None
+        and _is_hierarchical is not None
+        and not force_reload
+    ):
+        return _index, _parents, _children, _is_hierarchical
+
+    # Check if files exist
+    if not settings.faiss_index_path.exists():
+        raise FileNotFoundError(
+            f"FAISS index not found at {settings.faiss_index_path}. Run ingestion first."
+        )
+    if not settings.docstore_path.exists():
+        raise FileNotFoundError(
+            f"Docstore not found at {settings.docstore_path}. Run ingestion first."
+        )
+
+    # Load FAISS index
+    _index = faiss.read_index(str(settings.faiss_index_path))
+    print(f"Loaded FAISS index with {_index.ntotal} vectors")
+
+    # Load docstore
+    with open(settings.docstore_path, encoding="utf-8") as f:
+        docstore = json.load(f)
+
+    # Handle version migration
+    version = docstore.get("version", "1.0")
+
+    if version == "2.0":
+        # V2: hierarchical format
+        _is_hierarchical = True
+        _parents = {
+            p["chunk_id"]: HierarchicalChunk(**p) for p in docstore["chunks"]["parents"]
+        }
+        _children = [HierarchicalChunk(**c) for c in docstore["chunks"]["children"]]
+        print(
+            f"Loaded hierarchical docstore: {len(_parents)} parents, {len(_children)} children"
+        )
+    else:
+        # V1: flat format - no parents available
+        _is_hierarchical = False
+        _parents = {}
+        _children = []
+        print("Loaded flat docstore (v1) - hierarchical retrieval not available")
+
+    return _index, _parents, _children, _is_hierarchical
 
 
 def get_model() -> SentenceTransformer:
@@ -168,7 +246,182 @@ def retrieve_with_debug(
                 "chunk_id": r.chunk.chunk_id,
                 "doc_id": r.chunk.doc_id,
                 "classification": r.chunk.metadata.classification.value,
-                "text_preview": r.chunk.text[:200] + "..." if len(r.chunk.text) > 200 else r.chunk.text,
+                "text_preview": r.chunk.text[:200] + "..."
+                if len(r.chunk.text) > 200
+                else r.chunk.text,
+            }
+            for r in results
+        ],
+    }
+
+
+def retrieve_hierarchical(
+    query: str,
+    k: int | None = None,
+    return_parents: int = 3,
+    min_score: float = 0.0,
+) -> list[HierarchicalRetrievalResult]:
+    """
+    Retrieve with hierarchical parent context resolution.
+
+    Searches child chunks and returns parent chunks with their matched children.
+
+    Args:
+        query: Query string.
+        k: Number of child chunks to search. Defaults to settings.default_top_k * 3.
+        return_parents: Maximum number of parent chunks to return.
+        min_score: Minimum relevance score threshold.
+
+    Returns:
+        List of HierarchicalRetrievalResult objects.
+    """
+    # Clamp k to allowed range (over-fetch for better parent coverage)
+    if k is None:
+        k = settings.default_top_k * 3
+    k = min(k, settings.max_top_k * 3)
+
+    # Load hierarchical index
+    index, parents, children, is_hierarchical = load_hierarchical_index()
+
+    if not is_hierarchical:
+        print("Warning: Docstore is not hierarchical. Use retrieve() instead.")
+        return []
+
+    # Get query embedding
+    query_embedding = embed_query(query)
+
+    # Search children
+    scores, indices = index.search(query_embedding, k)
+
+    # Group by parent_id
+    parent_groups: dict[str, list[tuple[HierarchicalChunk, float]]] = {}
+    for score, idx in zip(scores[0], indices[0]):
+        if idx < 0 or idx >= len(children):
+            continue
+        if score < min_score:
+            continue
+
+        child = children[idx]
+        parent_id = child.parent_id
+        if parent_id is None:
+            continue
+
+        if parent_id not in parent_groups:
+            parent_groups[parent_id] = []
+        parent_groups[parent_id].append((child, float(score)))
+
+    # Build results for each parent
+    results = []
+    for parent_id, child_matches in parent_groups.items():
+        parent_chunk = parents.get(parent_id)
+        if parent_chunk is None:
+            continue
+
+        # Sort children by score
+        child_matches.sort(key=lambda x: x[1], reverse=True)
+        matched_children = [c for c, _ in child_matches]
+        child_scores = [s for _, s in child_matches]
+
+        # Aggregate score: use max child score
+        aggregate_score = max(child_scores) if child_scores else 0.0
+
+        results.append(
+            HierarchicalRetrievalResult(
+                parent_chunk=parent_chunk,
+                matched_children=matched_children,
+                child_scores=child_scores,
+                aggregate_score=aggregate_score,
+                rank=0,  # Will be set after sorting
+            )
+        )
+
+    # Sort by aggregate score and assign ranks
+    results.sort(key=lambda x: x.aggregate_score, reverse=True)
+    for i, result in enumerate(results[:return_parents]):
+        result.rank = i + 1
+
+    return results[:return_parents]
+
+
+def _get_parent_preview(text: str, header: str | None) -> str:
+    """
+    Get a preview of parent chunk: header + first N chars.
+
+    Args:
+        text: Full parent chunk text.
+        header: Section header.
+
+    Returns:
+        Preview string with header and initial content.
+    """
+    preview_size = settings.parent_preview_size
+    if len(text) <= preview_size:
+        return text
+
+    # Return header context + truncated preview
+    preview = text[:preview_size]
+    # Try to end at a sentence or line break
+    last_break = max(preview.rfind("\n"), preview.rfind(". "), preview.rfind("。"))
+    if last_break > preview_size // 2:
+        preview = preview[: last_break + 1]
+    return preview + "..."
+
+
+def retrieve_hierarchical_with_debug(
+    query: str,
+    k: int | None = None,
+    return_parents: int = 3,
+    include_full_parent: bool = False,
+) -> dict:
+    """
+    Retrieve hierarchically with debug information.
+
+    Provides two-stage context:
+    - preview: Section header + initial N chars
+    - full_text: Complete parent content (optional, for when preview is insufficient)
+
+    Args:
+        query: Query string.
+        k: Number of child chunks to search.
+        return_parents: Maximum number of parent chunks to return.
+        include_full_parent: If True, include full parent text in results.
+
+    Returns:
+        Dict with hierarchical results and debug info.
+    """
+    results = retrieve_hierarchical(query, k, return_parents)
+
+    return {
+        "query": query,
+        "k": k or settings.default_top_k * 3,
+        "return_parents": return_parents,
+        "num_results": len(results),
+        "results": [
+            {
+                "rank": r.rank,
+                "aggregate_score": round(r.aggregate_score, 4),
+                "parent": {
+                    "chunk_id": r.parent_chunk.chunk_id,
+                    "doc_id": r.parent_chunk.doc_id,
+                    "section_header": r.parent_chunk.section_header,
+                    "classification": r.parent_chunk.metadata.classification.value,
+                    # Two-stage context: preview first
+                    "preview": _get_parent_preview(
+                        r.parent_chunk.text, r.parent_chunk.section_header
+                    ),
+                    # Full text available on demand
+                    "full_text": r.parent_chunk.text if include_full_parent else None,
+                    "full_text_length": len(r.parent_chunk.text),
+                },
+                "matched_children": [
+                    {
+                        "chunk_id": c.chunk_id,
+                        "section_header": c.section_header,
+                        "score": round(s, 4),
+                        "text": c.text,
+                    }
+                    for c, s in zip(r.matched_children[:3], r.child_scores[:3])
+                ],
             }
             for r in results
         ],
