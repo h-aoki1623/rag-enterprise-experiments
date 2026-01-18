@@ -179,15 +179,17 @@ def generate_with_retrieval(
     k: int | None = None,
     use_hierarchical: bool = False,
     client: anthropic.Anthropic | None = None,
+    user_context: "UserContext | None" = None,
 ) -> GenerationResult:
     """
-    Convenience function: retrieve then generate.
+    Convenience function: retrieve then generate with RBAC filtering.
 
     Args:
         query: User's question.
         k: Number of chunks to retrieve.
         use_hierarchical: Whether to use hierarchical retrieval.
         client: Optional pre-configured Anthropic client.
+        user_context: User context for RBAC filtering. None = public-only access.
 
     Returns:
         GenerationResult.
@@ -195,8 +197,8 @@ def generate_with_retrieval(
     from .retrieve import retrieve, retrieve_hierarchical
 
     if use_hierarchical:
-        contexts = retrieve_hierarchical(query, k)
+        contexts = retrieve_hierarchical(query, k, user_context=user_context)
     else:
-        contexts = retrieve(query, k)
+        contexts = retrieve(query, k, user_context=user_context)
 
     return generate(query, contexts, client=client)

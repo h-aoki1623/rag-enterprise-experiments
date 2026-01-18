@@ -42,21 +42,34 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     """Search for documents matching a query."""
+    from src.rag.models import UserContext
+    from src.rag.retrieve import retrieve, retrieve_hierarchical
+
     query = args.query
     k = args.k
     use_hierarchy = args.hierarchical
+
+    # Build user context from CLI args
+    user_context = None
+    if args.tenant:
+        roles = args.roles.split(",") if args.roles else []
+        user_context = UserContext(tenant_id=args.tenant, user_roles=roles)
 
     print("=" * 60)
     print(f"Query: {query}")
     print(f"Top-k: {k}")
     print(f"Mode: {'Hierarchical' if use_hierarchy else 'Flat'}")
+    if user_context:
+        print(f"User Context: tenant={user_context.tenant_id}, roles={user_context.user_roles}")
+    else:
+        print("User Context: NONE (no access - strict tenant isolation)")
     print("=" * 60)
 
     try:
         if use_hierarchy:
             include_full = args.full if hasattr(args, "full") else False
             results = retrieve_hierarchical_with_debug(
-                query, k * 3, return_parents=k, include_full_parent=include_full
+                query, k * 3, return_parents=k, include_full_parent=include_full, user_context=user_context
             )
             print(f"\nFound {results['num_results']} parent chunks:\n")
 
@@ -91,7 +104,7 @@ def cmd_search(args: argparse.Namespace) -> int:
                         print(f"        {line}")
                 print()
         else:
-            results = retrieve_with_debug(query, k)
+            results = retrieve_with_debug(query, k, user_context=user_context)
             print(f"\nFound {results['num_results']} results:\n")
 
             for r in results["results"]:
@@ -165,14 +178,26 @@ def cmd_info(args: argparse.Namespace) -> int:
 
 def cmd_ask(args: argparse.Namespace) -> int:
     """Ask a question using RAG."""
+    from src.rag.models import UserContext
+
     question = args.question
     k = args.k
     use_hierarchical = args.hierarchical
+
+    # Build user context from CLI args
+    user_context = None
+    if args.tenant:
+        roles = args.roles.split(",") if args.roles else []
+        user_context = UserContext(tenant_id=args.tenant, user_roles=roles)
 
     print("=" * 60)
     print(f"Question: {question}")
     print(f"Retrieval mode: {'Hierarchical' if use_hierarchical else 'Flat'}")
     print(f"Top-k: {k}")
+    if user_context:
+        print(f"User Context: tenant={user_context.tenant_id}, roles={user_context.user_roles}")
+    else:
+        print("User Context: NONE (no access - strict tenant isolation)")
     print("=" * 60)
 
     try:
@@ -180,6 +205,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
             query=question,
             k=k,
             use_hierarchical=use_hierarchical,
+            user_context=user_context,
         )
 
         if args.json:
@@ -303,6 +329,28 @@ def main() -> int:
         "-H",
         action="store_true",
         help="Use hierarchical retrieval",
+    )
+    ask_parser.add_argument(
+        "--tenant",
+        type=str,
+        help="Tenant ID for multi-tenancy",
+    )
+    ask_parser.add_argument(
+        "--roles",
+        type=str,
+        help="Comma-separated list of user roles (optional, e.g., 'employee,contractor')",
+    )
+
+    # Add RBAC arguments to search parser
+    search_parser.add_argument(
+        "--tenant",
+        type=str,
+        help="Tenant ID for multi-tenancy",
+    )
+    search_parser.add_argument(
+        "--roles",
+        type=str,
+        help="Comma-separated list of user roles (optional, e.g., 'employee,contractor')",
     )
 
     args = parser.parse_args()

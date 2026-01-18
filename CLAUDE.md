@@ -104,7 +104,7 @@ Claude MUST use the following branch prefixes and meanings:
 - All plans created in Plan Mode MUST be persisted to a file.
 - Plan files MUST be created under:
   ```
-  ./.claude/plans/
+  $PROJECT_ROOT/.claude/plans/
   ```
 - File naming convention:
   ```
