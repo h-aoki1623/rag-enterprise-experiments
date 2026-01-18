@@ -30,6 +30,18 @@ class ChunkLevel(str, Enum):
     CHILD = "child"
 
 
+class UserContext(BaseModel):
+    """User context for RBAC filtering."""
+
+    tenant_id: str = Field(..., description="Tenant identifier for multi-tenancy isolation")
+    user_roles: list[str] = Field(
+        default_factory=list, description="List of roles assigned to user"
+    )
+    user_id: Optional[str] = Field(
+        default=None, description="User identifier for audit logging"
+    )
+
+
 class DocumentMetadata(BaseModel):
     """Metadata for a document."""
 

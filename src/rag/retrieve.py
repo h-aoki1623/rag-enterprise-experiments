@@ -171,22 +171,29 @@ def retrieve(
     query: str,
     k: int | None = None,
     min_score: float = 0.0,
+    user_context: "UserContext | None" = None,
 ) -> list[RetrievalResult]:
     """
-    Retrieve top-k most relevant chunks for a query.
+    Retrieve top-k most relevant chunks for a query with RBAC filtering.
 
     Args:
         query: Query string.
         k: Number of results to return. Defaults to settings.default_top_k.
         min_score: Minimum relevance score threshold (0-1 for cosine similarity).
+        user_context: User context for RBAC filtering. None = public-only access.
 
     Returns:
-        List of RetrievalResult objects sorted by relevance.
+        List of RetrievalResult objects sorted by relevance (filtered by RBAC).
     """
+    from .rbac import filter_retrieval_results
+
     # Clamp k to allowed range
     if k is None:
         k = settings.default_top_k
     k = min(k, settings.max_top_k)
+
+    # Over-fetch strategy: fetch k*3 to account for filtering
+    fetch_k = min(k * 3, settings.max_top_k * 3)
 
     # Load index and chunks
     index, chunks = load_index()
@@ -194,11 +201,11 @@ def retrieve(
     # Get query embedding
     query_embedding = embed_query(query)
 
-    # Search
-    scores, indices = index.search(query_embedding, k)
+    # Search (fetch more candidates)
+    scores, indices = index.search(query_embedding, fetch_k)
 
-    # Build results
-    results = []
+    # Build unfiltered results
+    unfiltered_results = []
     for rank, (score, idx) in enumerate(zip(scores[0], indices[0]), start=1):
         # Skip invalid indices (can happen if k > index size)
         if idx < 0 or idx >= len(chunks):
@@ -208,7 +215,7 @@ def retrieve(
         if score < min_score:
             continue
 
-        results.append(
+        unfiltered_results.append(
             RetrievalResult(
                 chunk=chunks[idx],
                 score=float(score),
@@ -216,12 +223,44 @@ def retrieve(
             )
         )
 
-    return results
+    # Apply RBAC filtering
+    filtered_results = filter_retrieval_results(unfiltered_results, user_context)
+
+    # If filtered results < k and we haven't hit max fetch limit, expand search
+    if len(filtered_results) < k and fetch_k < settings.max_top_k * 5:
+        expand_fetch_k = min(k * 5, settings.max_top_k * 5)
+        print(f"RBAC: Expanding search from {fetch_k} to {expand_fetch_k} due to filtering")
+
+        # Re-search with expanded k
+        scores, indices = index.search(query_embedding, expand_fetch_k)
+
+        # Rebuild unfiltered results
+        unfiltered_results = []
+        for rank, (score, idx) in enumerate(zip(scores[0], indices[0]), start=1):
+            if idx < 0 or idx >= len(chunks):
+                continue
+            if score < min_score:
+                continue
+
+            unfiltered_results.append(
+                RetrievalResult(
+                    chunk=chunks[idx],
+                    score=float(score),
+                    rank=rank,
+                )
+            )
+
+        # Re-apply filtering
+        filtered_results = filter_retrieval_results(unfiltered_results, user_context)
+
+    # Return top-k filtered results
+    return filtered_results[:k]
 
 
 def retrieve_with_debug(
     query: str,
     k: int | None = None,
+    user_context: "UserContext | None" = None,
 ) -> dict:
     """
     Retrieve with debug information for development.
@@ -229,11 +268,12 @@ def retrieve_with_debug(
     Args:
         query: Query string.
         k: Number of results.
+        user_context: User context for RBAC filtering.
 
     Returns:
         Dict with results and debug info.
     """
-    results = retrieve(query, k)
+    results = retrieve(query, k, user_context=user_context)
 
     return {
         "query": query,
@@ -260,21 +300,25 @@ def retrieve_hierarchical(
     k: int | None = None,
     return_parents: int = 3,
     min_score: float = 0.0,
+    user_context: "UserContext | None" = None,
 ) -> list[HierarchicalRetrievalResult]:
     """
-    Retrieve with hierarchical parent context resolution.
+    Retrieve with hierarchical parent context resolution and RBAC filtering.
 
     Searches child chunks and returns parent chunks with their matched children.
+    Filters at parent level based on user context.
 
     Args:
         query: Query string.
         k: Number of child chunks to search. Defaults to settings.default_top_k * 3.
         return_parents: Maximum number of parent chunks to return.
         min_score: Minimum relevance score threshold.
+        user_context: User context for RBAC filtering. None = public-only access.
 
     Returns:
-        List of HierarchicalRetrievalResult objects.
+        List of HierarchicalRetrievalResult objects (filtered by RBAC).
     """
+    from .rbac import filter_hierarchical_results
     # Clamp k to allowed range (over-fetch for better parent coverage)
     if k is None:
         k = settings.default_top_k * 3
@@ -310,8 +354,8 @@ def retrieve_hierarchical(
             parent_groups[parent_id] = []
         parent_groups[parent_id].append((child, float(score)))
 
-    # Build results for each parent
-    results = []
+    # Build unfiltered results for each parent
+    unfiltered_results = []
     for parent_id, child_matches in parent_groups.items():
         parent_chunk = parents.get(parent_id)
         if parent_chunk is None:
@@ -325,22 +369,24 @@ def retrieve_hierarchical(
         # Aggregate score: use max child score
         aggregate_score = max(child_scores) if child_scores else 0.0
 
-        results.append(
+        unfiltered_results.append(
             HierarchicalRetrievalResult(
                 parent_chunk=parent_chunk,
                 matched_children=matched_children,
                 child_scores=child_scores,
                 aggregate_score=aggregate_score,
-                rank=0,  # Will be set after sorting
+                rank=0,  # Will be set after filtering
             )
         )
 
-    # Sort by aggregate score and assign ranks
-    results.sort(key=lambda x: x.aggregate_score, reverse=True)
-    for i, result in enumerate(results[:return_parents]):
-        result.rank = i + 1
+    # Sort by aggregate score
+    unfiltered_results.sort(key=lambda x: x.aggregate_score, reverse=True)
 
-    return results[:return_parents]
+    # Apply RBAC filtering at parent level
+    filtered_results = filter_hierarchical_results(unfiltered_results, user_context)
+
+    # Return top return_parents results
+    return filtered_results[:return_parents]
 
 
 def _get_parent_preview(text: str, header: str | None) -> str:
@@ -372,6 +418,7 @@ def retrieve_hierarchical_with_debug(
     k: int | None = None,
     return_parents: int = 3,
     include_full_parent: bool = False,
+    user_context: "UserContext | None" = None,
 ) -> dict:
     """
     Retrieve hierarchically with debug information.
@@ -385,11 +432,12 @@ def retrieve_hierarchical_with_debug(
         k: Number of child chunks to search.
         return_parents: Maximum number of parent chunks to return.
         include_full_parent: If True, include full parent text in results.
+        user_context: User context for RBAC filtering.
 
     Returns:
         Dict with hierarchical results and debug info.
     """
-    results = retrieve_hierarchical(query, k, return_parents)
+    results = retrieve_hierarchical(query, k, return_parents, user_context=user_context)
 
     return {
         "query": query,

@@ -6,8 +6,11 @@ An enterprise-grade Retrieval-Augmented Generation (RAG) system designed to demo
 
 - **Document Ingestion**: Load, chunk, and embed documents with metadata
 - **Vector Search**: FAISS-based similarity search with relevance scoring
-- **Multi-tenant Support**: Tenant isolation via metadata filtering
+- **Multi-tenant Support**: Strict tenant isolation with RBAC filtering
+- **Role-Based Access Control**: Fine-grained access control via user roles
 - **Classification Levels**: Public, Internal, and Confidential document handling
+- **Hierarchical Chunking**: Parent-child chunk relationships for better context
+- **Answer Generation**: Citations, confidence scores, and policy flags
 - **Audit Trail**: Complete traceability of retrieval and generation
 
 ## Quick Start
@@ -66,23 +69,36 @@ This will:
 #### 2. Search Documents
 
 ```bash
+# Basic search (no access - strict tenant isolation)
 python -m src.app search "What is the vacation policy?"
+
+# Search with tenant context (public documents only)
+python -m src.app search "What is the vacation policy?" --tenant acme-corp
+
+# Search with tenant and role (role-based access)
+python -m src.app search "What is the vacation policy?" --tenant acme-corp --roles employee
+
+# Hierarchical search
+python -m src.app search "What is the vacation policy?" --tenant acme-corp --roles employee -H
 ```
 
 #### 3. Ask Questions (RAG)
 
 ```bash
-# Basic question
-python -m src.app ask "What is the vacation policy?"
+# Basic question with tenant context
+python -m src.app ask "What is the vacation policy?" --tenant acme-corp --roles employee
 
 # JSON output format
-python -m src.app ask "What is the vacation policy?" --json
+python -m src.app ask "What is the vacation policy?" --tenant acme-corp --roles employee --json
 
 # Use hierarchical retrieval
-python -m src.app ask "What is the vacation policy?" -H
+python -m src.app ask "What is the vacation policy?" --tenant acme-corp --roles employee -H
 
 # Specify number of chunks to retrieve
-python -m src.app ask "What is the vacation policy?" -k 3
+python -m src.app ask "What is the vacation policy?" --tenant acme-corp --roles employee -k 3
+
+# Public-only access (no roles required)
+python -m src.app ask "What products do we offer?" --tenant acme-corp
 ```
 
 Example output:
@@ -91,6 +107,7 @@ Example output:
 Question: What is the vacation policy?
 Retrieval mode: Flat
 Top-k: 5
+User Context: tenant=acme-corp, roles=['employee']
 ============================================================
 
 --- Answer ---
@@ -140,6 +157,7 @@ rag-enterprise-experiments/
 │       ├── ingest.py          # Document ingestion pipeline
 │       ├── retrieve.py        # Vector search layer
 │       ├── generate.py        # Answer generation with citations
+│       ├── rbac.py            # Role-Based Access Control filtering
 │       └── prompts.py         # System/user prompt templates
 ├── data/
 │   └── docs/                  # Source documents
@@ -148,6 +166,8 @@ rag-enterprise-experiments/
 │       └── confidential/      # Confidential documents
 ├── indexes/                   # Generated FAISS index
 ├── tests/                     # Test suite
+│   ├── test_rbac.py           # RBAC filtering tests
+│   └── ...
 ├── pyproject.toml             # Project configuration
 ├── Makefile                   # Common commands
 └── README.md
@@ -216,8 +236,16 @@ make format
 ## Implementation Roadmap
 
 - [x] **Step 1**: Ingest + Retrieval (no RBAC)
+  - Hierarchical chunking with parent-child relationships
+  - FAISS-based vector search
 - [x] **Step 2**: Generation (with citations)
-- [ ] **Step 3**: RBAC filter (tenant/role)
+  - Answer generation with Claude API
+  - Mandatory citations and confidence scores
+  - Policy flags for PII/confidential access
+- [x] **Step 3**: RBAC filter (tenant/role)
+  - Strict tenant isolation
+  - Role-based access control
+  - Post-retrieval filtering with over-fetch strategy
 - [ ] **Step 4**: Audit logging
 - [ ] **Step 5**: Failure modes (Injection / Leakage)
 - [ ] **Step 6**: Evals integration
@@ -233,18 +261,20 @@ Documents → Load → Chunk → Embed → FAISS Index
                          Docstore (JSON)
 ```
 
-### Retrieval Flow
+### Retrieval Flow (with RBAC)
 
 ```
-Query → Embed → FAISS Search → Top-K Chunks → Results
+Query + UserContext → Embed → FAISS Search (k×3) → RBAC Filter → Top-K Chunks → Results
+                                                         ↓
+                                              (Tenant + Role Check)
 ```
 
 ### Generation Flow (RAG)
 
 ```
-Query → Retrieve Top-K → Build Context → LLM Generation → Structured Response
-                                              ↓
-                                    {answer, citations, confidence, policy_flags}
+Query + UserContext → Retrieve Top-K → Build Context → LLM Generation → Structured Response
+                           ↓                                  ↓
+                    RBAC Filtering                  {answer, citations, confidence, policy_flags}
 ```
 
 **Security features:**
@@ -255,10 +285,31 @@ Query → Retrieve Top-K → Build Context → LLM Generation → Structured Res
 
 ## Security Considerations
 
-- **Classification-based access control** (planned)
-- **Tenant isolation** via metadata filtering
+### Access Control (RBAC)
+
+- **Strict Tenant Isolation**: No cross-tenant data leakage
+  - `user_context=None` → No access to any documents
+  - Documents filtered by `tenant_id` match
+- **Role-Based Access**: Fine-grained permissions
+  - Public documents: Accessible to all users within tenant
+  - Internal/Confidential: Requires specific roles in `allowed_roles`
+  - Empty `user_roles` → Can access public documents within tenant
+- **Post-Retrieval Filtering**: Over-fetch strategy (k×3, expandable to k×5)
+  - Ensures k results after RBAC filtering
+  - No modification to FAISS index required
+
+### Data Protection
+
 - **PII flagging** for sensitive documents
-- **Audit logging** for compliance (planned)
+- **Policy flags** for visibility into accessed data
+- **Mandatory citations** for answer traceability
+- **Confidence scoring** for answer reliability
+
+### Planned
+
+- **Audit logging** for compliance
+- **Prompt injection** detection and mitigation
+- **Data leakage** prevention mechanisms
 
 ## License
 
