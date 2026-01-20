@@ -1,13 +1,26 @@
 """Retrieval layer for vector search."""
 
 import json
+import time
+from typing import TYPE_CHECKING
 
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+from .audit import (
+    AuditLogger,
+    RetrievalEvent,
+    create_actor_from_user_context,
+    generate_request_id,
+    get_audit_logger,
+    hash_query,
+)
 from .config import settings
 from .models import Chunk, HierarchicalChunk, HierarchicalRetrievalResult, RetrievalResult
+
+if TYPE_CHECKING:
+    from .models import UserContext
 
 # Module-level cache for loaded resources
 _index: faiss.Index | None = None
@@ -172,6 +185,7 @@ def retrieve(
     k: int | None = None,
     min_score: float = 0.0,
     user_context: "UserContext | None" = None,
+    request_id: str | None = None,
 ) -> list[RetrievalResult]:
     """
     Retrieve top-k most relevant chunks for a query with RBAC filtering.
@@ -181,11 +195,21 @@ def retrieve(
         k: Number of results to return. Defaults to settings.default_top_k.
         min_score: Minimum relevance score threshold (0-1 for cosine similarity).
         user_context: User context for RBAC filtering. None = public-only access.
+        request_id: Optional correlation ID for audit logging.
 
     Returns:
         List of RetrievalResult objects sorted by relevance (filtered by RBAC).
     """
     from .rbac import filter_retrieval_results
+
+    start_time = time.perf_counter()
+
+    # Generate request_id if not provided
+    if request_id is None:
+        request_id = generate_request_id()
+
+    # Get audit logger
+    audit_logger = get_audit_logger()
 
     # Clamp k to allowed range
     if k is None:
@@ -223,8 +247,19 @@ def retrieve(
             )
         )
 
-    # Apply RBAC filtering
-    filtered_results = filter_retrieval_results(unfiltered_results, user_context)
+    results_before_filter = len(unfiltered_results)
+
+    # Apply RBAC filtering with audit logging
+    filtered_results = filter_retrieval_results(
+        unfiltered_results,
+        user_context,
+        request_id=request_id,
+        audit_logger=audit_logger,
+    )
+
+    filter_applied = ["rbac"]
+    if user_context:
+        filter_applied.append("tenant")
 
     # If filtered results < k and we haven't hit max fetch limit, expand search
     if len(filtered_results) < k and fetch_k < settings.max_top_k * 5:
@@ -250,11 +285,47 @@ def retrieve(
                 )
             )
 
-        # Re-apply filtering
-        filtered_results = filter_retrieval_results(unfiltered_results, user_context)
+        results_before_filter = len(unfiltered_results)
 
-    # Return top-k filtered results
-    return filtered_results[:k]
+        # Re-apply filtering with audit logging
+        filtered_results = filter_retrieval_results(
+            unfiltered_results,
+            user_context,
+            request_id=request_id,
+            audit_logger=audit_logger,
+        )
+
+    # Get final results
+    final_results = filtered_results[:k]
+
+    # Log retrieval event
+    latency_ms = (time.perf_counter() - start_time) * 1000
+    classifications_accessed = list(
+        set(r.chunk.metadata.classification.value for r in final_results)
+    )
+    pii_accessed = any(r.chunk.metadata.pii_flag for r in final_results)
+
+    actor = create_actor_from_user_context(user_context, auth_method="cli")
+    event = RetrievalEvent(
+        request_id=request_id,
+        actor=actor,
+        query_hash=hash_query(query),
+        embedding_model=settings.embedding_model,
+        k_requested=k,
+        results_before_filter=results_before_filter,
+        results_after_filter=len(filtered_results),
+        top_k_returned=len(final_results),
+        filter_applied=filter_applied,
+        classifications_accessed=classifications_accessed,
+        pii_accessed=pii_accessed,
+        policy_decision="allowed" if final_results else "no_results",
+        resource_type="chunk",
+        resource_ids=[r.chunk.chunk_id for r in final_results],
+        latency_ms=latency_ms,
+    )
+    audit_logger.log(event)
+
+    return final_results
 
 
 def retrieve_with_debug(
@@ -301,6 +372,7 @@ def retrieve_hierarchical(
     return_parents: int = 3,
     min_score: float = 0.0,
     user_context: "UserContext | None" = None,
+    request_id: str | None = None,
 ) -> list[HierarchicalRetrievalResult]:
     """
     Retrieve with hierarchical parent context resolution and RBAC filtering.
@@ -314,11 +386,22 @@ def retrieve_hierarchical(
         return_parents: Maximum number of parent chunks to return.
         min_score: Minimum relevance score threshold.
         user_context: User context for RBAC filtering. None = public-only access.
+        request_id: Optional correlation ID for audit logging.
 
     Returns:
         List of HierarchicalRetrievalResult objects (filtered by RBAC).
     """
     from .rbac import filter_hierarchical_results
+
+    start_time = time.perf_counter()
+
+    # Generate request_id if not provided
+    if request_id is None:
+        request_id = generate_request_id()
+
+    # Get audit logger
+    audit_logger = get_audit_logger()
+
     # Clamp k to allowed range (over-fetch for better parent coverage)
     if k is None:
         k = settings.default_top_k * 3
@@ -382,11 +465,52 @@ def retrieve_hierarchical(
     # Sort by aggregate score
     unfiltered_results.sort(key=lambda x: x.aggregate_score, reverse=True)
 
-    # Apply RBAC filtering at parent level
-    filtered_results = filter_hierarchical_results(unfiltered_results, user_context)
+    results_before_filter = len(unfiltered_results)
 
-    # Return top return_parents results
-    return filtered_results[:return_parents]
+    # Apply RBAC filtering at parent level with audit logging
+    filtered_results = filter_hierarchical_results(
+        unfiltered_results,
+        user_context,
+        request_id=request_id,
+        audit_logger=audit_logger,
+    )
+
+    # Get final results
+    final_results = filtered_results[:return_parents]
+
+    # Log retrieval event
+    latency_ms = (time.perf_counter() - start_time) * 1000
+    classifications_accessed = list(
+        set(r.parent_chunk.metadata.classification.value for r in final_results)
+    )
+    pii_accessed = any(r.parent_chunk.metadata.pii_flag for r in final_results)
+
+    filter_applied = ["rbac", "hierarchical"]
+    if user_context:
+        filter_applied.append("tenant")
+
+    actor = create_actor_from_user_context(user_context, auth_method="cli")
+    event = RetrievalEvent(
+        request_id=request_id,
+        actor=actor,
+        query_hash=hash_query(query),
+        index_name="hierarchical",
+        embedding_model=settings.embedding_model,
+        k_requested=return_parents,
+        results_before_filter=results_before_filter,
+        results_after_filter=len(filtered_results),
+        top_k_returned=len(final_results),
+        filter_applied=filter_applied,
+        classifications_accessed=classifications_accessed,
+        pii_accessed=pii_accessed,
+        policy_decision="allowed" if final_results else "no_results",
+        resource_type="parent_chunk",
+        resource_ids=[r.parent_chunk.chunk_id for r in final_results],
+        latency_ms=latency_ms,
+    )
+    audit_logger.log(event)
+
+    return final_results
 
 
 def _get_parent_preview(text: str, header: str | None) -> str:

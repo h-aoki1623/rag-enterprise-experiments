@@ -2,6 +2,15 @@
 
 from typing import Optional
 
+from .audit import (
+    AccessDecisionEvent,
+    Actor,
+    AuditEventType,
+    AuditLogger,
+    AuditSeverity,
+    DenialReason,
+    create_actor_from_user_context,
+)
 from .models import (
     DocumentMetadata,
     HierarchicalRetrievalResult,
@@ -10,57 +19,110 @@ from .models import (
 )
 
 
+def _map_denial_reason(reason_str: Optional[str]) -> Optional[DenialReason]:
+    """Map string denial reason to DenialReason enum."""
+    if reason_str is None:
+        return None
+    if reason_str == "no_user_context":
+        return DenialReason.NO_USER_CONTEXT
+    if reason_str.startswith("tenant_mismatch"):
+        return DenialReason.TENANT_MISMATCH
+    if reason_str.startswith("role_mismatch"):
+        return DenialReason.ROLE_MISMATCH
+    if reason_str == "no_allowed_roles":
+        return DenialReason.NO_ALLOWED_ROLES
+    return None
+
+
 def check_access(
     chunk_metadata: DocumentMetadata,
     user_context: Optional[UserContext],
+    request_id: str,
+    audit_logger: AuditLogger,
+    chunk_id: Optional[str] = None,
 ) -> tuple[bool, Optional[str]]:
     """
-    Check if user has access to a document chunk.
+    Check if user has access to a document chunk with mandatory audit logging.
 
     Args:
         chunk_metadata: Metadata of the chunk to check.
         user_context: User context (None = no access, strict tenant isolation).
+        request_id: Correlation ID for request tracing.
+        audit_logger: Audit logger instance (required for compliance).
+        chunk_id: Optional chunk identifier.
 
     Returns:
         Tuple of (has_access: bool, denial_reason: Optional[str]).
     """
+    decision_basis: list[str] = []
+
+    # Perform access check with decision basis tracking
+    has_access = False
+    denial_reason: Optional[str] = None
+
     # Rule 0: No user context = no access (strict tenant isolation)
     if user_context is None:
-        return False, "no_user_context"
-
+        denial_reason = "no_user_context"
     # Rule 1: Tenant isolation (must match tenant_id)
-    if chunk_metadata.tenant_id != user_context.tenant_id:
-        return False, f"tenant_mismatch:{chunk_metadata.tenant_id}"
+    elif chunk_metadata.tenant_id != user_context.tenant_id:
+        denial_reason = f"tenant_mismatch:{chunk_metadata.tenant_id}"
+    else:
+        decision_basis.append("tenant_match")
 
-    # Rule 2: Public documents within tenant are accessible
-    if "public" in chunk_metadata.allowed_roles:
-        return True, None
+        # Rule 2: Public documents within tenant are accessible
+        if "public" in chunk_metadata.allowed_roles:
+            decision_basis.append("public_access")
+            has_access = True
+        # Rule 3: Role-based access
+        elif not chunk_metadata.allowed_roles:
+            denial_reason = "no_allowed_roles"
+        else:
+            user_roles_set = set(user_context.user_roles)
+            allowed_roles_set = set(chunk_metadata.allowed_roles)
 
-    # Rule 3: Role-based access
-    if not chunk_metadata.allowed_roles:
-        # No roles specified = no access (secure default)
-        return False, "no_allowed_roles"
+            if user_roles_set & allowed_roles_set:
+                decision_basis.append("role_match")
+                has_access = True
+            else:
+                denial_reason = f"role_mismatch:required={allowed_roles_set}"
 
-    user_roles_set = set(user_context.user_roles)
-    allowed_roles_set = set(chunk_metadata.allowed_roles)
+    # Log the access decision (mandatory for compliance)
+    actor = create_actor_from_user_context(user_context, auth_method="cli")
+    event = AccessDecisionEvent(
+        request_id=request_id,
+        event_type=AuditEventType.ACCESS_GRANTED if has_access else AuditEventType.ACCESS_DENIED,
+        severity=AuditSeverity.INFO if has_access else AuditSeverity.WARN,
+        actor=actor,
+        doc_id=chunk_metadata.doc_id,
+        chunk_id=chunk_id,
+        classification=chunk_metadata.classification.value,
+        decision="granted" if has_access else "denied",
+        denial_reason=_map_denial_reason(denial_reason),
+        decision_basis=decision_basis,
+        pii_accessed=chunk_metadata.pii_flag if has_access else False,
+        policy_decision="allowed" if has_access else "blocked",
+        resource_type="chunk" if chunk_id else "document",
+        resource_ids=[chunk_id] if chunk_id else [chunk_metadata.doc_id],
+    )
+    audit_logger.log(event)
 
-    if not (user_roles_set & allowed_roles_set):
-        return False, f"role_mismatch:required={allowed_roles_set}"
-
-    # Access granted
-    return True, None
+    return has_access, denial_reason
 
 
 def filter_retrieval_results(
     results: list[RetrievalResult],
     user_context: Optional[UserContext],
+    request_id: str,
+    audit_logger: AuditLogger,
 ) -> list[RetrievalResult]:
     """
-    Filter flat retrieval results based on RBAC rules.
+    Filter flat retrieval results based on RBAC rules with mandatory audit logging.
 
     Args:
         results: List of retrieval results.
         user_context: User context for access control.
+        request_id: Correlation ID for request tracing.
+        audit_logger: Audit logger instance (required for compliance).
 
     Returns:
         Filtered list maintaining rank order.
@@ -69,7 +131,14 @@ def filter_retrieval_results(
     rank = 1
 
     for result in results:
-        has_access, _ = check_access(result.chunk.metadata, user_context)
+        has_access, _ = check_access(
+            result.chunk.metadata,
+            user_context,
+            request_id=request_id,
+            audit_logger=audit_logger,
+            chunk_id=result.chunk.chunk_id,
+        )
+
         if has_access:
             # Create new result with updated rank
             filtered_result = RetrievalResult(
@@ -86,13 +155,17 @@ def filter_retrieval_results(
 def filter_hierarchical_results(
     results: list[HierarchicalRetrievalResult],
     user_context: Optional[UserContext],
+    request_id: str,
+    audit_logger: AuditLogger,
 ) -> list[HierarchicalRetrievalResult]:
     """
-    Filter hierarchical results based on parent RBAC rules.
+    Filter hierarchical results based on parent RBAC rules with mandatory audit logging.
 
     Args:
         results: List of hierarchical retrieval results.
         user_context: User context for access control.
+        request_id: Correlation ID for request tracing.
+        audit_logger: Audit logger instance (required for compliance).
 
     Returns:
         Filtered list maintaining rank order.
@@ -102,7 +175,14 @@ def filter_hierarchical_results(
 
     for result in results:
         # Check access at parent level (children inherit parent metadata)
-        has_access, _ = check_access(result.parent_chunk.metadata, user_context)
+        has_access, _ = check_access(
+            result.parent_chunk.metadata,
+            user_context,
+            request_id=request_id,
+            audit_logger=audit_logger,
+            chunk_id=result.parent_chunk.chunk_id,
+        )
+
         if has_access:
             # Create new result with updated rank
             filtered_result = HierarchicalRetrievalResult(

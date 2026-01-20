@@ -21,11 +21,13 @@ An enterprise-grade RAG (Retrieval-Augmented Generation) system implementation p
 src/
 ├── app.py              # CLI entry point
 └── rag/
-    ├── config.py       # Settings class
+    ├── config.py       # Settings class (includes AuditSettings)
     ├── models.py       # Pydantic models
     ├── ingest.py       # Document ingestion pipeline
-    ├── retrieve.py     # Vector search
+    ├── retrieve.py     # Vector search with RBAC
     ├── generate.py     # Answer generation with citations
+    ├── rbac.py         # Role-Based Access Control with mandatory audit
+    ├── audit.py        # Enterprise audit logging (hash chain, tamper detection)
     └── prompts.py      # System/user prompt templates
 
 data/docs/              # Source documents (.md + .meta.json)
@@ -34,6 +36,7 @@ data/docs/              # Source documents (.md + .meta.json)
 └── confidential/
 
 indexes/                # FAISS index + docstore.json
+logs/                   # Audit logs (hash-chained JSON)
 tests/                  # pytest tests
 ```
 
@@ -179,8 +182,8 @@ Each document consists of a `.md` file paired with a `.meta.json` sidecar file:
 
 1. ✅ **Step 1**: Ingest + Retrieval (no RBAC)
 2. ✅ **Step 2**: Generation (with citations)
-3. ⬜ **Step 3**: RBAC filter (tenant/role)
-4. ⬜ **Step 4**: Audit logging
+3. ✅ **Step 3**: RBAC filter (tenant/role)
+4. ✅ **Step 4**: Audit logging
 5. ⬜ **Step 5**: Failure modes (Injection / Leakage) - reproduce & mitigate
 6. ⬜ **Step 6**: Evals integration
 7. ⬜ **Step 7**: Remaining failures (Hallucination / Cost / Rate Limiting)

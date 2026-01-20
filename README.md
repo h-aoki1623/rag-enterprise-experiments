@@ -11,7 +11,7 @@ An enterprise-grade Retrieval-Augmented Generation (RAG) system designed to demo
 - **Classification Levels**: Public, Internal, and Confidential document handling
 - **Hierarchical Chunking**: Parent-child chunk relationships for better context
 - **Answer Generation**: Citations, confidence scores, and policy flags
-- **Audit Trail**: Complete traceability of retrieval and generation
+- **Enterprise Audit Logging**: Hash-chained tamper-evident logs with mandatory access tracking
 
 ## Quick Start
 
@@ -152,12 +152,13 @@ rag-enterprise-experiments/
 ├── src/
 │   ├── app.py                 # CLI entry point
 │   └── rag/
-│       ├── config.py          # Configuration settings
+│       ├── config.py          # Configuration settings (includes AuditSettings)
 │       ├── models.py          # Pydantic data models
 │       ├── ingest.py          # Document ingestion pipeline
-│       ├── retrieve.py        # Vector search layer
+│       ├── retrieve.py        # Vector search layer with RBAC
 │       ├── generate.py        # Answer generation with citations
-│       ├── rbac.py            # Role-Based Access Control filtering
+│       ├── rbac.py            # Role-Based Access Control with mandatory audit
+│       ├── audit.py           # Enterprise audit logging (hash chain)
 │       └── prompts.py         # System/user prompt templates
 ├── data/
 │   └── docs/                  # Source documents
@@ -165,8 +166,10 @@ rag-enterprise-experiments/
 │       ├── internal/          # Internal documents
 │       └── confidential/      # Confidential documents
 ├── indexes/                   # Generated FAISS index
+├── logs/                      # Audit logs (hash-chained JSON)
 ├── tests/                     # Test suite
 │   ├── test_rbac.py           # RBAC filtering tests
+│   ├── test_audit.py          # Audit logging tests
 │   └── ...
 ├── pyproject.toml             # Project configuration
 ├── Makefile                   # Common commands
@@ -246,7 +249,12 @@ make format
   - Strict tenant isolation
   - Role-based access control
   - Post-retrieval filtering with over-fetch strategy
-- [ ] **Step 4**: Audit logging
+- [x] **Step 4**: Audit logging
+  - Hash-chained tamper-evident logs
+  - Mandatory access decision logging
+  - Trust boundary aware actor model
+  - Sensitive data masking
+  - Hash chain persistence across restarts
 - [ ] **Step 5**: Failure modes (Injection / Leakage)
 - [ ] **Step 6**: Evals integration
 - [ ] **Step 7**: Remaining failures (Hallucination / Cost / Rate Limiting)
@@ -305,9 +313,47 @@ Query + UserContext → Retrieve Top-K → Build Context → LLM Generation → 
 - **Mandatory citations** for answer traceability
 - **Confidence scoring** for answer reliability
 
+### Audit Logging
+
+Enterprise-grade audit logging with:
+
+- **Hash Chain**: Each log event includes `prev_event_hash` and `event_hash` for tamper detection
+- **Mandatory Logging**: All RBAC access decisions are logged (no opt-out)
+- **Trust Boundary**: Actor model tracks `authenticated_id` vs `asserted_id`
+- **Sensitive Data Masking**: Queries and PII can be masked in logs
+- **Persistence**: Hash chain continues across process restarts
+- **Configurable Handlers**: File rotation, stdout JSON (containers), or memory (tests)
+
+Audit log format (JSON Lines):
+```json
+{
+  "timestamp": "2026-01-20T10:30:00Z",
+  "request_id": "req-abc123",
+  "event_type": "access_granted",
+  "severity": "INFO",
+  "actor": {
+    "tenant_id": "acme-corp",
+    "user_id": "user-001",
+    "roles": ["employee"],
+    "auth_method": "cli"
+  },
+  "doc_id": "internal-001",
+  "classification": "internal",
+  "decision": "granted",
+  "decision_basis": ["tenant_match", "role_match"],
+  "prev_event_hash": "a1b2c3d4e5f6",
+  "event_hash": "f6e5d4c3b2a1"
+}
+```
+
+Verify hash chain integrity:
+```python
+from src.rag.audit import verify_hash_chain
+is_valid, errors = verify_hash_chain("logs/audit.log")
+```
+
 ### Planned
 
-- **Audit logging** for compliance
 - **Prompt injection** detection and mitigation
 - **Data leakage** prevention mechanisms
 

@@ -2,6 +2,8 @@
 
 import pytest
 
+from src.rag.audit import AuditLogger
+from src.rag.config import AuditSettings
 from src.rag.models import (
     Chunk,
     ChunkLevel,
@@ -17,6 +19,22 @@ from src.rag.rbac import (
     filter_hierarchical_results,
     filter_retrieval_results,
 )
+
+
+@pytest.fixture
+def audit_logger():
+    """Create an audit logger for testing."""
+    settings = AuditSettings(enabled=True, handler_type="memory")
+    logger = AuditLogger(settings)
+    yield logger
+    # Reset singleton for next test
+    AuditLogger._instance = None
+
+
+@pytest.fixture
+def request_id():
+    """Create a test request ID."""
+    return "test-request-001"
 
 
 class TestUserContext:
@@ -52,7 +70,7 @@ class TestUserContext:
 class TestCheckAccess:
     """Test check_access function."""
 
-    def test_tenant_isolation_same_tenant(self):
+    def test_tenant_isolation_same_tenant(self, audit_logger, request_id):
         """Test access granted for same tenant."""
         metadata = DocumentMetadata(
             doc_id="doc1",
@@ -64,11 +82,13 @@ class TestCheckAccess:
         )
         user_context = UserContext(tenant_id="tenant-a", user_roles=["public"])
 
-        has_access, reason = check_access(metadata, user_context)
+        has_access, reason = check_access(
+            metadata, user_context, request_id, audit_logger
+        )
         assert has_access is True
         assert reason is None
 
-    def test_tenant_isolation_different_tenant(self):
+    def test_tenant_isolation_different_tenant(self, audit_logger, request_id):
         """Test that different tenants cannot access each other's docs."""
         metadata = DocumentMetadata(
             doc_id="doc1",
@@ -80,11 +100,13 @@ class TestCheckAccess:
         )
         user_context = UserContext(tenant_id="tenant-b", user_roles=["public"])
 
-        has_access, reason = check_access(metadata, user_context)
+        has_access, reason = check_access(
+            metadata, user_context, request_id, audit_logger
+        )
         assert has_access is False
         assert "tenant_mismatch" in reason
 
-    def test_role_based_access_granted(self):
+    def test_role_based_access_granted(self, audit_logger, request_id):
         """Test access granted when user has required role."""
         metadata = DocumentMetadata(
             doc_id="doc1",
@@ -96,11 +118,13 @@ class TestCheckAccess:
         )
         user_context = UserContext(tenant_id="test-tenant", user_roles=["employee"])
 
-        has_access, reason = check_access(metadata, user_context)
+        has_access, reason = check_access(
+            metadata, user_context, request_id, audit_logger
+        )
         assert has_access is True
         assert reason is None
 
-    def test_role_based_access_denied(self):
+    def test_role_based_access_denied(self, audit_logger, request_id):
         """Test access denied when user lacks required role."""
         metadata = DocumentMetadata(
             doc_id="doc1",
@@ -112,11 +136,13 @@ class TestCheckAccess:
         )
         user_context = UserContext(tenant_id="test-tenant", user_roles=["public"])
 
-        has_access, reason = check_access(metadata, user_context)
+        has_access, reason = check_access(
+            metadata, user_context, request_id, audit_logger
+        )
         assert has_access is False
         assert "role_mismatch" in reason
 
-    def test_multiple_roles_any_match(self):
+    def test_multiple_roles_any_match(self, audit_logger, request_id):
         """Test that any matching role grants access."""
         metadata = DocumentMetadata(
             doc_id="doc1",
@@ -131,11 +157,13 @@ class TestCheckAccess:
             tenant_id="test-tenant", user_roles=["public", "contractor"]
         )
 
-        has_access, reason = check_access(metadata, user_context)
+        has_access, reason = check_access(
+            metadata, user_context, request_id, audit_logger
+        )
         assert has_access is True
         assert reason is None
 
-    def test_no_user_context_denies_all(self):
+    def test_no_user_context_denies_all(self, audit_logger, request_id):
         """Test None user_context denies access to all documents (strict tenant isolation)."""
         # Even public documents are not accessible without user context
         metadata_public = DocumentMetadata(
@@ -146,7 +174,9 @@ class TestCheckAccess:
             pii_flag=False,
             source="test",
         )
-        has_access, reason = check_access(metadata_public, None)
+        has_access, reason = check_access(
+            metadata_public, None, request_id, audit_logger
+        )
         assert has_access is False
         assert reason == "no_user_context"
 
@@ -159,11 +189,13 @@ class TestCheckAccess:
             pii_flag=False,
             source="test",
         )
-        has_access, reason = check_access(metadata_internal, None)
+        has_access, reason = check_access(
+            metadata_internal, None, request_id, audit_logger
+        )
         assert has_access is False
         assert reason == "no_user_context"
 
-    def test_public_within_tenant(self):
+    def test_public_within_tenant(self, audit_logger, request_id):
         """Test that public documents are accessible within the same tenant."""
         metadata = DocumentMetadata(
             doc_id="doc1",
@@ -176,11 +208,13 @@ class TestCheckAccess:
         # User with any role in the same tenant can access public documents
         user_context = UserContext(tenant_id="test-tenant", user_roles=["employee"])
 
-        has_access, reason = check_access(metadata, user_context)
+        has_access, reason = check_access(
+            metadata, user_context, request_id, audit_logger
+        )
         assert has_access is True
         assert reason is None
 
-    def test_no_allowed_roles_denies_access(self):
+    def test_no_allowed_roles_denies_access(self, audit_logger, request_id):
         """Test secure default for documents with empty allowed_roles."""
         metadata = DocumentMetadata(
             doc_id="doc1",
@@ -192,15 +226,55 @@ class TestCheckAccess:
         )
         user_context = UserContext(tenant_id="test-tenant", user_roles=["employee"])
 
-        has_access, reason = check_access(metadata, user_context)
+        has_access, reason = check_access(
+            metadata, user_context, request_id, audit_logger
+        )
         assert has_access is False
         assert "no_allowed_roles" in reason
+
+    def test_audit_logging_on_access_granted(self, audit_logger, request_id):
+        """Test that audit log is created when access is granted."""
+        metadata = DocumentMetadata(
+            doc_id="doc1",
+            tenant_id="test-tenant",
+            classification=Classification.PUBLIC,
+            allowed_roles=["public"],
+            pii_flag=False,
+            source="test",
+        )
+        user_context = UserContext(tenant_id="test-tenant", user_roles=["public"])
+
+        check_access(metadata, user_context, request_id, audit_logger)
+
+        records = audit_logger.get_memory_records()
+        assert len(records) == 1
+        assert "access_granted" in records[0]
+        assert "doc1" in records[0]
+
+    def test_audit_logging_on_access_denied(self, audit_logger, request_id):
+        """Test that audit log is created when access is denied."""
+        metadata = DocumentMetadata(
+            doc_id="doc1",
+            tenant_id="tenant-a",
+            classification=Classification.PUBLIC,
+            allowed_roles=["public"],
+            pii_flag=False,
+            source="test",
+        )
+        user_context = UserContext(tenant_id="tenant-b", user_roles=["public"])
+
+        check_access(metadata, user_context, request_id, audit_logger)
+
+        records = audit_logger.get_memory_records()
+        assert len(records) == 1
+        assert "access_denied" in records[0]
+        assert "tenant_mismatch" in records[0]
 
 
 class TestFilterRetrievalResults:
     """Test filter_retrieval_results function."""
 
-    def test_filter_preserves_order(self):
+    def test_filter_preserves_order(self, audit_logger, request_id):
         """Test that filtering maintains rank order."""
         metadata1 = DocumentMetadata(
             doc_id="doc1",
@@ -237,13 +311,15 @@ class TestFilterRetrievalResults:
         ]
 
         user_context = UserContext(tenant_id="test-tenant", user_roles=["public"])
-        filtered = filter_retrieval_results(results, user_context)
+        filtered = filter_retrieval_results(
+            results, user_context, request_id, audit_logger
+        )
 
         assert len(filtered) == 2
         assert filtered[0].chunk.chunk_id == "chunk1"
         assert filtered[1].chunk.chunk_id == "chunk2"
 
-    def test_filter_updates_ranks(self):
+    def test_filter_updates_ranks(self, audit_logger, request_id):
         """Test that ranks are re-numbered after filtering."""
         metadata_public = DocumentMetadata(
             doc_id="doc1",
@@ -297,7 +373,9 @@ class TestFilterRetrievalResults:
 
         # Public user can only see public docs
         user_context = UserContext(tenant_id="test-tenant", user_roles=["public"])
-        filtered = filter_retrieval_results(results, user_context)
+        filtered = filter_retrieval_results(
+            results, user_context, request_id, audit_logger
+        )
 
         assert len(filtered) == 2
         assert filtered[0].rank == 1
@@ -305,7 +383,7 @@ class TestFilterRetrievalResults:
         assert filtered[1].rank == 2
         assert filtered[1].chunk.chunk_id == "chunk3"
 
-    def test_filter_returns_only_allowed(self):
+    def test_filter_returns_only_allowed(self, audit_logger, request_id):
         """Test that only allowed documents pass through."""
         metadata_employee = DocumentMetadata(
             doc_id="doc1",
@@ -349,22 +427,24 @@ class TestFilterRetrievalResults:
 
         # Employee cannot see executive docs
         user_context = UserContext(tenant_id="test-tenant", user_roles=["employee"])
-        filtered = filter_retrieval_results(results, user_context)
+        filtered = filter_retrieval_results(
+            results, user_context, request_id, audit_logger
+        )
 
         assert len(filtered) == 1
         assert filtered[0].chunk.chunk_id == "chunk1"
 
-    def test_filter_handles_empty_results(self):
+    def test_filter_handles_empty_results(self, audit_logger, request_id):
         """Test filtering empty list."""
         user_context = UserContext(tenant_id="test-tenant", user_roles=["employee"])
-        filtered = filter_retrieval_results([], user_context)
+        filtered = filter_retrieval_results([], user_context, request_id, audit_logger)
         assert len(filtered) == 0
 
 
 class TestFilterHierarchicalResults:
     """Test filter_hierarchical_results function."""
 
-    def test_filter_by_parent_metadata(self):
+    def test_filter_by_parent_metadata(self, audit_logger, request_id):
         """Test that filtering uses parent metadata."""
         parent_metadata = DocumentMetadata(
             doc_id="doc1",
@@ -405,15 +485,22 @@ class TestFilterHierarchicalResults:
 
         # Employee can access
         user_context = UserContext(tenant_id="test-tenant", user_roles=["employee"])
-        filtered = filter_hierarchical_results(results, user_context)
+        filtered = filter_hierarchical_results(
+            results, user_context, request_id, audit_logger
+        )
         assert len(filtered) == 1
+
+        # Reset audit logger for next check
+        audit_logger._memory_handler.clear()
 
         # Public cannot access
         user_context_public = UserContext(tenant_id="test-tenant", user_roles=["public"])
-        filtered_public = filter_hierarchical_results(results, user_context_public)
+        filtered_public = filter_hierarchical_results(
+            results, user_context_public, request_id, audit_logger
+        )
         assert len(filtered_public) == 0
 
-    def test_filter_preserves_children(self):
+    def test_filter_preserves_children(self, audit_logger, request_id):
         """Test that matched children are preserved after parent filter."""
         parent_metadata = DocumentMetadata(
             doc_id="doc1",
@@ -456,13 +543,15 @@ class TestFilterHierarchicalResults:
         ]
 
         user_context = UserContext(tenant_id="test-tenant", user_roles=["public"])
-        filtered = filter_hierarchical_results(results, user_context)
+        filtered = filter_hierarchical_results(
+            results, user_context, request_id, audit_logger
+        )
 
         assert len(filtered) == 1
         assert len(filtered[0].matched_children) == 3
         assert filtered[0].child_scores == [0.9, 0.8, 0.7]
 
-    def test_filter_updates_hierarchical_ranks(self):
+    def test_filter_updates_hierarchical_ranks(self, audit_logger, request_id):
         """Test that hierarchical ranks are updated after filtering."""
         metadata_public = DocumentMetadata(
             doc_id="doc1",
@@ -525,7 +614,9 @@ class TestFilterHierarchicalResults:
 
         # Public user filters out internal doc
         user_context = UserContext(tenant_id="test-tenant", user_roles=["public"])
-        filtered = filter_hierarchical_results(results, user_context)
+        filtered = filter_hierarchical_results(
+            results, user_context, request_id, audit_logger
+        )
 
         assert len(filtered) == 2
         assert filtered[0].rank == 1
