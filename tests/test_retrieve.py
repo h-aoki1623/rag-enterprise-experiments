@@ -5,13 +5,27 @@ import numpy as np
 import pytest
 
 from src.rag.ingest import build_index, chunk_documents, embed_chunks, load_documents
-from src.rag.models import Chunk, Classification, RetrievalResult
+from src.rag.models import Chunk, Classification, RetrievalResult, UserContext
 from src.rag.retrieve import (
     embed_query,
     get_model,
     load_index,
     retrieve,
     retrieve_with_debug,
+)
+
+
+# Test user contexts for different access levels
+EMPLOYEE_CONTEXT = UserContext(
+    tenant_id="test-tenant",
+    user_roles=["employee"],
+    user_id="test-employee",
+)
+
+EXECUTIVE_CONTEXT = UserContext(
+    tenant_id="test-tenant",
+    user_roles=["executive", "employee"],
+    user_id="test-executive",
 )
 
 
@@ -155,13 +169,13 @@ class TestRetrieve:
 
     def test_retrieve_returns_list(self, indexed_data):
         """Test that retrieve returns a list."""
-        results = retrieve("vacation policy")
+        results = retrieve("vacation policy", user_context=EMPLOYEE_CONTEXT)
 
         assert isinstance(results, list)
 
     def test_retrieve_returns_retrieval_results(self, indexed_data):
         """Test that results are RetrievalResult objects."""
-        results = retrieve("vacation policy")
+        results = retrieve("vacation policy", user_context=EMPLOYEE_CONTEXT)
 
         for result in results:
             assert isinstance(result, RetrievalResult)
@@ -171,15 +185,15 @@ class TestRetrieve:
 
     def test_retrieve_respects_k_parameter(self, indexed_data):
         """Test that k parameter limits results."""
-        results_k2 = retrieve("vacation policy", k=2)
-        results_k5 = retrieve("vacation policy", k=5)
+        results_k2 = retrieve("vacation policy", k=2, user_context=EMPLOYEE_CONTEXT)
+        results_k5 = retrieve("vacation policy", k=5, user_context=EMPLOYEE_CONTEXT)
 
         assert len(results_k2) <= 2
         assert len(results_k5) <= 5
 
     def test_retrieve_results_ranked(self, indexed_data):
         """Test that results are ranked by score."""
-        results = retrieve("vacation policy", k=5)
+        results = retrieve("vacation policy", k=5, user_context=EMPLOYEE_CONTEXT)
 
         # Scores should be in descending order
         scores = [r.score for r in results]
@@ -194,7 +208,7 @@ class TestRetrieve:
         from src.rag.config import settings
 
         # Request more than max
-        results = retrieve("vacation policy", k=100)
+        results = retrieve("vacation policy", k=100, user_context=EMPLOYEE_CONTEXT)
 
         assert len(results) <= settings.max_top_k
 
@@ -202,13 +216,13 @@ class TestRetrieve:
         """Test that default k is used when not specified."""
         from src.rag.config import settings
 
-        results = retrieve("vacation policy")
+        results = retrieve("vacation policy", user_context=EMPLOYEE_CONTEXT)
 
         assert len(results) <= settings.default_top_k
 
     def test_retrieve_relevant_results(self, indexed_data):
         """Test that relevant documents are retrieved."""
-        results = retrieve("vacation policy")
+        results = retrieve("vacation policy", user_context=EMPLOYEE_CONTEXT)
 
         # Should find the internal document about vacation
         found_vacation_doc = any(
@@ -218,8 +232,10 @@ class TestRetrieve:
 
     def test_retrieve_min_score_filter(self, indexed_data):
         """Test that min_score filters low-scoring results."""
-        results_no_filter = retrieve("vacation policy")
-        results_with_filter = retrieve("vacation policy", min_score=0.5)
+        results_no_filter = retrieve("vacation policy", user_context=EMPLOYEE_CONTEXT)
+        results_with_filter = retrieve(
+            "vacation policy", min_score=0.5, user_context=EMPLOYEE_CONTEXT
+        )
 
         # Filtered results should all have score >= min_score
         for result in results_with_filter:
@@ -230,7 +246,7 @@ class TestRetrieve:
 
     def test_retrieve_includes_metadata(self, indexed_data):
         """Test that retrieved chunks include metadata."""
-        results = retrieve("company products")
+        results = retrieve("company products", user_context=EMPLOYEE_CONTEXT)
 
         for result in results:
             assert result.chunk.metadata is not None
@@ -240,32 +256,39 @@ class TestRetrieve:
                 Classification.CONFIDENTIAL,
             ]
 
+    def test_retrieve_no_user_context_returns_empty(self, indexed_data):
+        """Test that retrieve with no user_context returns empty results (RBAC)."""
+        results = retrieve("vacation policy", user_context=None)
+
+        # Without user context, all access should be denied
+        assert len(results) == 0
+
 
 class TestRetrieveWithDebug:
     """Tests for retrieve_with_debug function."""
 
     def test_retrieve_with_debug_returns_dict(self, indexed_data):
         """Test that debug retrieval returns dictionary."""
-        results = retrieve_with_debug("vacation policy")
+        results = retrieve_with_debug("vacation policy", user_context=EMPLOYEE_CONTEXT)
 
         assert isinstance(results, dict)
 
     def test_retrieve_with_debug_contains_query(self, indexed_data):
         """Test that debug results contain query."""
         query = "vacation policy"
-        results = retrieve_with_debug(query)
+        results = retrieve_with_debug(query, user_context=EMPLOYEE_CONTEXT)
 
         assert results["query"] == query
 
     def test_retrieve_with_debug_contains_k(self, indexed_data):
         """Test that debug results contain k value."""
-        results = retrieve_with_debug("vacation policy", k=3)
+        results = retrieve_with_debug("vacation policy", k=3, user_context=EMPLOYEE_CONTEXT)
 
         assert results["k"] == 3
 
     def test_retrieve_with_debug_contains_results(self, indexed_data):
         """Test that debug results contain formatted results."""
-        results = retrieve_with_debug("vacation policy")
+        results = retrieve_with_debug("vacation policy", user_context=EMPLOYEE_CONTEXT)
 
         assert "results" in results
         assert "num_results" in results
@@ -273,7 +296,7 @@ class TestRetrieveWithDebug:
 
     def test_retrieve_with_debug_result_format(self, indexed_data):
         """Test that debug results have expected format."""
-        results = retrieve_with_debug("vacation policy")
+        results = retrieve_with_debug("vacation policy", user_context=EMPLOYEE_CONTEXT)
 
         for r in results["results"]:
             assert "rank" in r
@@ -285,7 +308,7 @@ class TestRetrieveWithDebug:
 
     def test_retrieve_with_debug_text_preview_truncated(self, indexed_data):
         """Test that long text is truncated in preview."""
-        results = retrieve_with_debug("vacation policy")
+        results = retrieve_with_debug("vacation policy", user_context=EMPLOYEE_CONTEXT)
 
         for r in results["results"]:
             # Preview should end with ... if truncated, or be complete
@@ -317,7 +340,8 @@ class TestRetrievalScenarios:
 
     def test_public_document_retrieval(self, indexed_data):
         """Test retrieval of public documents."""
-        results = retrieve("company products CloudSync")
+        # Employee can see public and internal documents
+        results = retrieve("company products CloudSync", user_context=EMPLOYEE_CONTEXT)
 
         # Should find public document
         public_results = [
@@ -328,7 +352,8 @@ class TestRetrievalScenarios:
 
     def test_internal_document_retrieval(self, indexed_data):
         """Test retrieval of internal documents."""
-        results = retrieve("sick leave policy")
+        # Employee can see internal documents
+        results = retrieve("sick leave policy", user_context=EMPLOYEE_CONTEXT)
 
         # Should find internal document
         internal_results = [
@@ -339,7 +364,8 @@ class TestRetrievalScenarios:
 
     def test_confidential_document_retrieval(self, indexed_data):
         """Test retrieval of confidential documents."""
-        results = retrieve("executive salary CEO compensation")
+        # Executive can see confidential documents
+        results = retrieve("executive salary CEO compensation", user_context=EXECUTIVE_CONTEXT)
 
         # Should find confidential document
         confidential_results = [
@@ -350,9 +376,22 @@ class TestRetrievalScenarios:
 
     def test_cross_classification_retrieval(self, indexed_data):
         """Test that retrieval works across classifications."""
-        results = retrieve("document information", k=10)
+        # Executive can see all classifications
+        results = retrieve("document information", k=10, user_context=EXECUTIVE_CONTEXT)
 
         # Should potentially find documents from multiple classifications
         classifications = set(r.chunk.metadata.classification for r in results)
         # At minimum should find something
         assert len(classifications) >= 1
+
+    def test_employee_cannot_see_confidential(self, indexed_data):
+        """Test that employee cannot retrieve confidential documents."""
+        # Employee should not see confidential documents
+        results = retrieve("executive salary CEO compensation", user_context=EMPLOYEE_CONTEXT)
+
+        # Should not find confidential document
+        confidential_results = [
+            r for r in results
+            if r.chunk.metadata.classification == Classification.CONFIDENTIAL
+        ]
+        assert len(confidential_results) == 0

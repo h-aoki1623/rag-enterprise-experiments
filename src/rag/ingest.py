@@ -1,6 +1,7 @@
 """Document ingestion pipeline: load, chunk, embed, and index."""
 
 import json
+import time
 from pathlib import Path
 
 import faiss
@@ -8,6 +9,12 @@ import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 
+from .audit import (
+    Actor,
+    IngestionEvent,
+    generate_request_id,
+    get_audit_logger,
+)
 from .config import settings
 from .hierarchy import chunk_documents_hierarchical
 from .models import Chunk, Document, DocumentMetadata, HierarchicalChunk
@@ -251,58 +258,118 @@ def ingest_all(docs_dir: Path | None = None, use_hierarchy: bool | None = None) 
     Returns:
         Statistics about the ingestion.
     """
+    start_time = time.perf_counter()
+    request_id = generate_request_id()
+    audit_logger = get_audit_logger()
+
     # Determine chunking mode
     if use_hierarchy is None:
         use_hierarchy = settings.hierarchy_enabled
 
-    # Load documents
-    documents = load_documents(docs_dir)
-    if not documents:
-        print("No documents found to ingest")
-        return {"documents": 0, "chunks": 0}
+    # Resolve docs_dir
+    resolved_docs_dir = docs_dir or settings.docs_dir
+    source_path = str(resolved_docs_dir)
 
-    # Load embedding model once
-    model = SentenceTransformer(settings.embedding_model)
+    # Track failure count
+    failure_count = 0
+    documents_processed = 0
+    chunks_created = 0
+    doc_ids_sample: list[str] = []
 
-    if use_hierarchy:
-        # Hierarchical chunking
-        print("Using hierarchical chunking...")
-        parents, children = chunk_documents_hierarchical(documents)
+    try:
+        # Load documents
+        documents = load_documents(docs_dir)
+        if not documents:
+            print("No documents found to ingest")
+            stats = {"documents": 0, "chunks": 0}
 
-        # Generate embeddings for children only
-        embeddings = embed_hierarchical_chunks(children, model)
+            # Log empty ingestion
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            event = IngestionEvent(
+                request_id=request_id,
+                actor=Actor(auth_method="cli"),
+                source_type="filesystem",
+                source_path=source_path,
+                documents_processed=0,
+                chunks_created=0,
+                failure_count=0,
+                doc_ids_sample=[],
+                policy_decision="no_documents",
+                latency_ms=latency_ms,
+            )
+            audit_logger.log(event)
 
-        # Build hierarchical index
-        build_hierarchical_index(embeddings, parents, children)
+            return stats
 
-        stats = {
-            "documents": len(documents),
-            "parents": len(parents),
-            "children": len(children),
-            "hierarchy_enabled": True,
-            "index_path": str(settings.faiss_index_path),
-            "docstore_path": str(settings.docstore_path),
-        }
-    else:
-        # Flat chunking (legacy mode)
-        print("Using flat chunking...")
-        chunks = chunk_documents(documents)
+        documents_processed = len(documents)
+        doc_ids_sample = [doc.metadata.doc_id for doc in documents[:5]]
 
-        # Generate embeddings
-        embeddings = embed_chunks(chunks, model)
+        # Load embedding model once
+        model = SentenceTransformer(settings.embedding_model)
 
-        # Build flat index
-        build_index(embeddings, chunks)
+        if use_hierarchy:
+            # Hierarchical chunking
+            print("Using hierarchical chunking...")
+            parents, children = chunk_documents_hierarchical(documents)
 
-        stats = {
-            "documents": len(documents),
-            "chunks": len(chunks),
-            "hierarchy_enabled": False,
-            "index_path": str(settings.faiss_index_path),
-            "docstore_path": str(settings.docstore_path),
-        }
+            # Generate embeddings for children only
+            embeddings = embed_hierarchical_chunks(children, model)
 
-    print(f"\nIngestion complete: {stats}")
+            # Build hierarchical index
+            build_hierarchical_index(embeddings, parents, children)
+
+            chunks_created = len(children)
+            stats = {
+                "documents": len(documents),
+                "parents": len(parents),
+                "children": len(children),
+                "hierarchy_enabled": True,
+                "index_path": str(settings.faiss_index_path),
+                "docstore_path": str(settings.docstore_path),
+            }
+        else:
+            # Flat chunking (legacy mode)
+            print("Using flat chunking...")
+            chunks = chunk_documents(documents)
+
+            # Generate embeddings
+            embeddings = embed_chunks(chunks, model)
+
+            # Build flat index
+            build_index(embeddings, chunks)
+
+            chunks_created = len(chunks)
+            stats = {
+                "documents": len(documents),
+                "chunks": len(chunks),
+                "hierarchy_enabled": False,
+                "index_path": str(settings.faiss_index_path),
+                "docstore_path": str(settings.docstore_path),
+            }
+
+        print(f"\nIngestion complete: {stats}")
+
+    except Exception as e:
+        failure_count = 1
+        raise
+    finally:
+        # Always log the ingestion event
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        event = IngestionEvent(
+            request_id=request_id,
+            actor=Actor(auth_method="cli"),
+            source_type="filesystem",
+            source_path=source_path,
+            documents_processed=documents_processed,
+            chunks_created=chunks_created,
+            failure_count=failure_count,
+            doc_ids_sample=doc_ids_sample,
+            policy_decision="completed" if failure_count == 0 else "failed",
+            resource_type="index",
+            latency_ms=latency_ms,
+        )
+        audit_logger.log(event)
+
     return stats
 
 
