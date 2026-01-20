@@ -75,7 +75,6 @@ class DenialReason(str, Enum):
     """Standardized denial reasons for RBAC."""
 
     NO_USER_CONTEXT = "no_user_context"
-    TENANT_MISMATCH = "tenant_mismatch"
     ROLE_MISMATCH = "role_mismatch"
     NO_ALLOWED_ROLES = "no_allowed_roles"
     CLASSIFICATION_DENIED = "classification_denied"
@@ -95,11 +94,9 @@ class Actor(BaseModel):
 
     # Verified identity (after authentication)
     authenticated_user_id: Optional[str] = None
-    authenticated_tenant_id: Optional[str] = None
 
     # Asserted values (from request, may differ)
     asserted_user_id: Optional[str] = None
-    asserted_tenant_id: Optional[str] = None
     asserted_roles: list[str] = Field(default_factory=list)
 
     # Authentication context
@@ -508,9 +505,7 @@ def create_actor_from_user_context(
     return Actor(
         # For CLI, asserted and authenticated are the same
         authenticated_user_id=getattr(user_context, "user_id", None),
-        authenticated_tenant_id=getattr(user_context, "tenant_id", None),
         asserted_user_id=getattr(user_context, "user_id", None),
-        asserted_tenant_id=getattr(user_context, "tenant_id", None),
         asserted_roles=getattr(user_context, "user_roles", []),
         auth_method=auth_method,
     )

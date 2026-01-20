@@ -123,7 +123,6 @@ class TestPolicyFlags:
         """PII metadata should trigger PII_REFERENCED flag."""
         metadata = DocumentMetadata(
             doc_id="test-doc",
-            tenant_id="test-tenant",
             classification=Classification.INTERNAL,
             pii_flag=True,
         )
@@ -143,7 +142,6 @@ class TestPolicyFlags:
         """Confidential classification should trigger CONFIDENTIAL flag."""
         metadata = DocumentMetadata(
             doc_id="test-doc",
-            tenant_id="test-tenant",
             classification=Classification.CONFIDENTIAL,
             pii_flag=False,
         )
@@ -163,7 +161,6 @@ class TestPolicyFlags:
         """Public doc without PII should have no special flags."""
         metadata = DocumentMetadata(
             doc_id="test-doc",
-            tenant_id="test-tenant",
             classification=Classification.PUBLIC,
             pii_flag=False,
         )

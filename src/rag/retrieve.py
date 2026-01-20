@@ -9,7 +9,6 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from .audit import (
-    AuditLogger,
     RetrievalEvent,
     create_actor_from_user_context,
     generate_request_id,
@@ -258,8 +257,6 @@ def retrieve(
     )
 
     filter_applied = ["rbac"]
-    if user_context:
-        filter_applied.append("tenant")
 
     # If filtered results < k and we haven't hit max fetch limit, expand search
     if len(filtered_results) < k and fetch_k < settings.max_top_k * 5:
@@ -486,8 +483,6 @@ def retrieve_hierarchical(
     pii_accessed = any(r.parent_chunk.metadata.pii_flag for r in final_results)
 
     filter_applied = ["rbac", "hierarchical"]
-    if user_context:
-        filter_applied.append("tenant")
 
     actor = create_actor_from_user_context(user_context, auth_method="cli")
     event = RetrievalEvent(

@@ -349,7 +349,7 @@ def ingest_all(docs_dir: Path | None = None, use_hierarchy: bool | None = None) 
 
         print(f"\nIngestion complete: {stats}")
 
-    except Exception as e:
+    except Exception:
         failure_count = 1
         raise
     finally:

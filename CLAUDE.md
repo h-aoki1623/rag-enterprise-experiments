@@ -170,7 +170,6 @@ Each document consists of a `.md` file paired with a `.meta.json` sidecar file:
 ```json
 {
   "doc_id": "public-001",
-  "tenant_id": "acme-corp",
   "classification": "public|internal|confidential",
   "allowed_roles": ["employee", "contractor"],
   "pii_flag": false,
@@ -182,7 +181,7 @@ Each document consists of a `.md` file paired with a `.meta.json` sidecar file:
 
 1. ✅ **Step 1**: Ingest + Retrieval (no RBAC)
 2. ✅ **Step 2**: Generation (with citations)
-3. ✅ **Step 3**: RBAC filter (tenant/role)
+3. ✅ **Step 3**: RBAC filter (role-based)
 4. ✅ **Step 4**: Audit logging
 5. ⬜ **Step 5**: Failure modes (Injection / Leakage) - reproduce & mitigate
 6. ⬜ **Step 6**: Evals integration

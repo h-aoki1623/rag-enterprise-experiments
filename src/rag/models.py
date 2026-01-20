@@ -33,7 +33,6 @@ class ChunkLevel(str, Enum):
 class UserContext(BaseModel):
     """User context for RBAC filtering."""
 
-    tenant_id: str = Field(..., description="Tenant identifier for multi-tenancy isolation")
     user_roles: list[str] = Field(
         default_factory=list, description="List of roles assigned to user"
     )
@@ -46,7 +45,6 @@ class DocumentMetadata(BaseModel):
     """Metadata for a document."""
 
     doc_id: str = Field(..., description="Unique document identifier")
-    tenant_id: str = Field(..., description="Tenant identifier for multi-tenancy")
     classification: Classification = Field(..., description="Security classification")
     allowed_roles: list[str] = Field(
         default_factory=list, description="Roles allowed to access this document"

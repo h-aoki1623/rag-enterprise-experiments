@@ -6,7 +6,6 @@ An enterprise-grade Retrieval-Augmented Generation (RAG) system designed to demo
 
 - **Document Ingestion**: Load, chunk, and embed documents with metadata
 - **Vector Search**: FAISS-based similarity search with relevance scoring
-- **Multi-tenant Support**: Strict tenant isolation with RBAC filtering
 - **Role-Based Access Control**: Fine-grained access control via user roles
 - **Classification Levels**: Public, Internal, and Confidential document handling
 - **Hierarchical Chunking**: Parent-child chunk relationships for better context
@@ -69,36 +68,33 @@ This will:
 #### 2. Search Documents
 
 ```bash
-# Basic search (no access - strict tenant isolation)
+# Basic search (no RBAC filtering)
 python -m src.app search "What is the vacation policy?"
 
-# Search with tenant context (public documents only)
-python -m src.app search "What is the vacation policy?" --tenant acme-corp
-
-# Search with tenant and role (role-based access)
-python -m src.app search "What is the vacation policy?" --tenant acme-corp --roles employee
+# Search with role-based access control
+python -m src.app search "What is the vacation policy?" --roles employee
 
 # Hierarchical search
-python -m src.app search "What is the vacation policy?" --tenant acme-corp --roles employee -H
+python -m src.app search "What is the vacation policy?" --roles employee -H
 ```
 
 #### 3. Ask Questions (RAG)
 
 ```bash
-# Basic question with tenant context
-python -m src.app ask "What is the vacation policy?" --tenant acme-corp --roles employee
+# Basic question with role-based access
+python -m src.app ask "What is the vacation policy?" --roles employee
 
 # JSON output format
-python -m src.app ask "What is the vacation policy?" --tenant acme-corp --roles employee --json
+python -m src.app ask "What is the vacation policy?" --roles employee --json
 
 # Use hierarchical retrieval
-python -m src.app ask "What is the vacation policy?" --tenant acme-corp --roles employee -H
+python -m src.app ask "What is the vacation policy?" --roles employee -H
 
 # Specify number of chunks to retrieve
-python -m src.app ask "What is the vacation policy?" --tenant acme-corp --roles employee -k 3
+python -m src.app ask "What is the vacation policy?" --roles employee -k 3
 
 # Public-only access (no roles required)
-python -m src.app ask "What products do we offer?" --tenant acme-corp
+python -m src.app ask "What products do we offer?"
 ```
 
 Example output:
@@ -107,7 +103,7 @@ Example output:
 Question: What is the vacation policy?
 Retrieval mode: Flat
 Top-k: 5
-User Context: tenant=acme-corp, roles=['employee']
+User Context: roles=['employee']
 ============================================================
 
 --- Answer ---
@@ -191,7 +187,6 @@ Metadata schema:
 ```json
 {
   "doc_id": "public-001",
-  "tenant_id": "acme-corp",
   "classification": "public",
   "allowed_roles": ["employee", "contractor", "public"],
   "pii_flag": false,
@@ -245,8 +240,7 @@ make format
   - Answer generation with Claude API
   - Mandatory citations and confidence scores
   - Policy flags for PII/confidential access
-- [x] **Step 3**: RBAC filter (tenant/role)
-  - Strict tenant isolation
+- [x] **Step 3**: RBAC filter (role-based)
   - Role-based access control
   - Post-retrieval filtering with over-fetch strategy
 - [x] **Step 4**: Audit logging
@@ -274,7 +268,7 @@ Documents → Load → Chunk → Embed → FAISS Index
 ```
 Query + UserContext → Embed → FAISS Search (k×3) → RBAC Filter → Top-K Chunks → Results
                                                          ↓
-                                              (Tenant + Role Check)
+                                                   (Role Check)
 ```
 
 ### Generation Flow (RAG)
@@ -295,13 +289,10 @@ Query + UserContext → Retrieve Top-K → Build Context → LLM Generation → 
 
 ### Access Control (RBAC)
 
-- **Strict Tenant Isolation**: No cross-tenant data leakage
-  - `user_context=None` → No access to any documents
-  - Documents filtered by `tenant_id` match
 - **Role-Based Access**: Fine-grained permissions
-  - Public documents: Accessible to all users within tenant
+  - `user_context=None` → No access to any documents
+  - Public documents: Accessible to all authenticated users
   - Internal/Confidential: Requires specific roles in `allowed_roles`
-  - Empty `user_roles` → Can access public documents within tenant
 - **Post-Retrieval Filtering**: Over-fetch strategy (k×3, expandable to k×5)
   - Ensures k results after RBAC filtering
   - No modification to FAISS index required
@@ -332,7 +323,6 @@ Audit log format (JSON Lines):
   "event_type": "access_granted",
   "severity": "INFO",
   "actor": {
-    "tenant_id": "acme-corp",
     "user_id": "user-001",
     "roles": ["employee"],
     "auth_method": "cli"
@@ -340,7 +330,7 @@ Audit log format (JSON Lines):
   "doc_id": "internal-001",
   "classification": "internal",
   "decision": "granted",
-  "decision_basis": ["tenant_match", "role_match"],
+  "decision_basis": ["role_match"],
   "prev_event_hash": "a1b2c3d4e5f6",
   "event_hash": "f6e5d4c3b2a1"
 }

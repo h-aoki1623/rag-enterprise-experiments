@@ -43,7 +43,6 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 def cmd_search(args: argparse.Namespace) -> int:
     """Search for documents matching a query."""
     from src.rag.models import UserContext
-    from src.rag.retrieve import retrieve, retrieve_hierarchical
 
     query = args.query
     k = args.k
@@ -51,18 +50,18 @@ def cmd_search(args: argparse.Namespace) -> int:
 
     # Build user context from CLI args
     user_context = None
-    if args.tenant:
-        roles = args.roles.split(",") if args.roles else []
-        user_context = UserContext(tenant_id=args.tenant, user_roles=roles)
+    if args.roles:
+        roles = args.roles.split(",")
+        user_context = UserContext(user_roles=roles)
 
     print("=" * 60)
     print(f"Query: {query}")
     print(f"Top-k: {k}")
     print(f"Mode: {'Hierarchical' if use_hierarchy else 'Flat'}")
     if user_context:
-        print(f"User Context: tenant={user_context.tenant_id}, roles={user_context.user_roles}")
+        print(f"User Context: roles={user_context.user_roles}")
     else:
-        print("User Context: NONE (no access - strict tenant isolation)")
+        print("User Context: NONE (no RBAC filtering)")
     print("=" * 60)
 
     try:
@@ -186,18 +185,18 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
     # Build user context from CLI args
     user_context = None
-    if args.tenant:
-        roles = args.roles.split(",") if args.roles else []
-        user_context = UserContext(tenant_id=args.tenant, user_roles=roles)
+    if args.roles:
+        roles = args.roles.split(",")
+        user_context = UserContext(user_roles=roles)
 
     print("=" * 60)
     print(f"Question: {question}")
     print(f"Retrieval mode: {'Hierarchical' if use_hierarchical else 'Flat'}")
     print(f"Top-k: {k}")
     if user_context:
-        print(f"User Context: tenant={user_context.tenant_id}, roles={user_context.user_roles}")
+        print(f"User Context: roles={user_context.user_roles}")
     else:
-        print("User Context: NONE (no access - strict tenant isolation)")
+        print("User Context: NONE (no RBAC filtering)")
     print("=" * 60)
 
     try:
@@ -331,26 +330,16 @@ def main() -> int:
         help="Use hierarchical retrieval",
     )
     ask_parser.add_argument(
-        "--tenant",
-        type=str,
-        help="Tenant ID for multi-tenancy",
-    )
-    ask_parser.add_argument(
         "--roles",
         type=str,
-        help="Comma-separated list of user roles (optional, e.g., 'employee,contractor')",
+        help="Comma-separated list of user roles (e.g., 'employee,contractor')",
     )
 
     # Add RBAC arguments to search parser
     search_parser.add_argument(
-        "--tenant",
-        type=str,
-        help="Tenant ID for multi-tenancy",
-    )
-    search_parser.add_argument(
         "--roles",
         type=str,
-        help="Comma-separated list of user roles (optional, e.g., 'employee,contractor')",
+        help="Comma-separated list of user roles (e.g., 'employee,contractor')",
     )
 
     args = parser.parse_args()
