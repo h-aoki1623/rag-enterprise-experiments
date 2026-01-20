@@ -4,7 +4,6 @@ from typing import Optional
 
 from .audit import (
     AccessDecisionEvent,
-    Actor,
     AuditEventType,
     AuditLogger,
     AuditSeverity,
@@ -25,8 +24,6 @@ def _map_denial_reason(reason_str: Optional[str]) -> Optional[DenialReason]:
         return None
     if reason_str == "no_user_context":
         return DenialReason.NO_USER_CONTEXT
-    if reason_str.startswith("tenant_mismatch"):
-        return DenialReason.TENANT_MISMATCH
     if reason_str.startswith("role_mismatch"):
         return DenialReason.ROLE_MISMATCH
     if reason_str == "no_allowed_roles":
@@ -46,7 +43,7 @@ def check_access(
 
     Args:
         chunk_metadata: Metadata of the chunk to check.
-        user_context: User context (None = no access, strict tenant isolation).
+        user_context: User context (None = no access).
         request_id: Correlation ID for request tracing.
         audit_logger: Audit logger instance (required for compliance).
         chunk_id: Optional chunk identifier.
@@ -60,31 +57,25 @@ def check_access(
     has_access = False
     denial_reason: Optional[str] = None
 
-    # Rule 0: No user context = no access (strict tenant isolation)
+    # Rule 0: No user context = no access
     if user_context is None:
         denial_reason = "no_user_context"
-    # Rule 1: Tenant isolation (must match tenant_id)
-    elif chunk_metadata.tenant_id != user_context.tenant_id:
-        denial_reason = f"tenant_mismatch:{chunk_metadata.tenant_id}"
+    # Rule 1: Public documents are accessible to all authenticated users
+    elif "public" in chunk_metadata.allowed_roles:
+        decision_basis.append("public_access")
+        has_access = True
+    # Rule 2: Role-based access
+    elif not chunk_metadata.allowed_roles:
+        denial_reason = "no_allowed_roles"
     else:
-        decision_basis.append("tenant_match")
+        user_roles_set = set(user_context.user_roles)
+        allowed_roles_set = set(chunk_metadata.allowed_roles)
 
-        # Rule 2: Public documents within tenant are accessible
-        if "public" in chunk_metadata.allowed_roles:
-            decision_basis.append("public_access")
+        if user_roles_set & allowed_roles_set:
+            decision_basis.append("role_match")
             has_access = True
-        # Rule 3: Role-based access
-        elif not chunk_metadata.allowed_roles:
-            denial_reason = "no_allowed_roles"
         else:
-            user_roles_set = set(user_context.user_roles)
-            allowed_roles_set = set(chunk_metadata.allowed_roles)
-
-            if user_roles_set & allowed_roles_set:
-                decision_basis.append("role_match")
-                has_access = True
-            else:
-                denial_reason = f"role_mismatch:required={allowed_roles_set}"
+            denial_reason = f"role_mismatch:required={allowed_roles_set}"
 
     # Log the access decision (mandatory for compliance)
     actor = create_actor_from_user_context(user_context, auth_method="cli")

@@ -39,7 +39,6 @@ def sample_docs_dir(temp_dir):
     public_meta = docs_dir / "public" / "test-public.meta.json"
     public_meta.write_text(json.dumps({
         "doc_id": "test-public-001",
-        "tenant_id": "test-tenant",
         "classification": "public",
         "allowed_roles": ["employee", "public"],
         "pii_flag": False,
@@ -59,7 +58,6 @@ def sample_docs_dir(temp_dir):
     internal_meta = docs_dir / "internal" / "test-internal.meta.json"
     internal_meta.write_text(json.dumps({
         "doc_id": "test-internal-001",
-        "tenant_id": "test-tenant",
         "classification": "internal",
         "allowed_roles": ["employee"],
         "pii_flag": False,
@@ -78,7 +76,6 @@ def sample_docs_dir(temp_dir):
     confidential_meta = docs_dir / "confidential" / "test-confidential.meta.json"
     confidential_meta.write_text(json.dumps({
         "doc_id": "test-confidential-001",
-        "tenant_id": "test-tenant",
         "classification": "confidential",
         "allowed_roles": ["executive"],
         "pii_flag": True,
@@ -101,7 +98,6 @@ def sample_metadata():
     """Create sample document metadata."""
     return DocumentMetadata(
         doc_id="test-doc-001",
-        tenant_id="test-tenant",
         classification=Classification.INTERNAL,
         allowed_roles=["employee"],
         pii_flag=False,

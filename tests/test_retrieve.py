@@ -14,16 +14,13 @@ from src.rag.retrieve import (
     retrieve_with_debug,
 )
 
-
 # Test user contexts for different access levels
 EMPLOYEE_CONTEXT = UserContext(
-    tenant_id="test-tenant",
     user_roles=["employee"],
     user_id="test-employee",
 )
 
 EXECUTIVE_CONTEXT = UserContext(
-    tenant_id="test-tenant",
     user_roles=["executive", "employee"],
     user_id="test-executive",
 )

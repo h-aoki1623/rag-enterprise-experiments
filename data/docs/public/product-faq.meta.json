@@ -1,6 +1,5 @@
 {
   "doc_id": "public-002",
-  "tenant_id": "acme-corp",
   "classification": "public",
   "allowed_roles": ["employee", "contractor", "public"],
   "pii_flag": false,

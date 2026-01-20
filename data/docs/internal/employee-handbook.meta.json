@@ -1,6 +1,5 @@
 {
   "doc_id": "internal-001",
-  "tenant_id": "acme-corp",
   "classification": "internal",
   "allowed_roles": ["employee", "contractor"],
   "pii_flag": false,

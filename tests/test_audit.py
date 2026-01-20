@@ -1,11 +1,7 @@
 """Tests for audit logging module."""
 
 import json
-import tempfile
 import threading
-import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -60,7 +56,6 @@ class TestAuditEnums:
     def test_denial_reasons(self):
         """Test DenialReason enum values."""
         assert DenialReason.NO_USER_CONTEXT.value == "no_user_context"
-        assert DenialReason.TENANT_MISMATCH.value == "tenant_mismatch"
         assert DenialReason.ROLE_MISMATCH.value == "role_mismatch"
         assert DenialReason.NO_ALLOWED_ROLES.value == "no_allowed_roles"
 
@@ -72,12 +67,10 @@ class TestActor:
         """Test basic Actor instantiation."""
         actor = Actor(
             authenticated_user_id="user-123",
-            authenticated_tenant_id="tenant-a",
             asserted_roles=["employee"],
             auth_method="cli",
         )
         assert actor.authenticated_user_id == "user-123"
-        assert actor.authenticated_tenant_id == "tenant-a"
         assert actor.asserted_roles == ["employee"]
         assert actor.auth_method == "cli"
 
@@ -85,25 +78,20 @@ class TestActor:
         """Test Actor with default values."""
         actor = Actor()
         assert actor.authenticated_user_id is None
-        assert actor.authenticated_tenant_id is None
         assert actor.asserted_user_id is None
-        assert actor.asserted_tenant_id is None
         assert actor.asserted_roles == []
         assert actor.auth_method is None
 
     def test_create_actor_from_user_context(self):
         """Test creating Actor from UserContext."""
         user_context = UserContext(
-            tenant_id="test-tenant",
             user_roles=["employee", "contractor"],
             user_id="user-456",
         )
         actor = create_actor_from_user_context(user_context, auth_method="api")
 
         assert actor.authenticated_user_id == "user-456"
-        assert actor.authenticated_tenant_id == "test-tenant"
         assert actor.asserted_user_id == "user-456"
-        assert actor.asserted_tenant_id == "test-tenant"
         assert actor.asserted_roles == ["employee", "contractor"]
         assert actor.auth_method == "api"
 
@@ -112,7 +100,6 @@ class TestActor:
         actor = create_actor_from_user_context(None, auth_method="cli")
 
         assert actor.authenticated_user_id is None
-        assert actor.authenticated_tenant_id is None
         assert actor.asserted_roles == []
         assert actor.auth_method == "cli"
 
@@ -178,7 +165,7 @@ class TestSpecializedEvents:
             classification="confidential",
             decision="denied",
             denial_reason=DenialReason.ROLE_MISMATCH,
-            decision_basis=["tenant_match"],
+            decision_basis=["role_match"],
         )
 
         assert event.doc_id == "doc-001"
@@ -200,7 +187,7 @@ class TestSpecializedEvents:
             results_before_filter=15,
             results_after_filter=5,
             top_k_returned=5,
-            filter_applied=["rbac", "tenant"],
+            filter_applied=["rbac"],
             classifications_accessed=["public", "internal"],
             latency_ms=127.5,
         )
@@ -506,7 +493,7 @@ class TestVerifyHashChain:
         # from Pydantic's serialization. This test verifies the file exists and is valid JSON.
         assert log_file.exists()
         content = log_file.read_text()
-        lines = [l for l in content.strip().split("\n") if l]
+        lines = [line for line in content.strip().split("\n") if line]
         assert len(lines) == 3
 
         for line in lines:
@@ -583,7 +570,7 @@ class TestVerifyHashChain:
 
         # Verify the log file has 4 events with continuous hash chain
         content = log_file.read_text()
-        lines = [l for l in content.strip().split("\n") if l]
+        lines = [line for line in content.strip().split("\n") if line]
         assert len(lines) == 4
 
         # Parse all events and verify hash chain continuity
@@ -711,7 +698,6 @@ class TestIntegrationWithRBAC:
 
         metadata = DocumentMetadata(
             doc_id="doc-001",
-            tenant_id="test-tenant",
             classification=Classification.INTERNAL,
             allowed_roles=["employee"],
             pii_flag=True,
@@ -719,7 +705,6 @@ class TestIntegrationWithRBAC:
         )
 
         user_context = UserContext(
-            tenant_id="test-tenant",
             user_roles=["employee"],
             user_id="user-001",
         )
@@ -761,7 +746,6 @@ class TestIntegrationWithRBAC:
 
         metadata = DocumentMetadata(
             doc_id="doc-002",
-            tenant_id="test-tenant",
             classification=Classification.CONFIDENTIAL,
             allowed_roles=["executive"],
             pii_flag=False,
@@ -769,7 +753,6 @@ class TestIntegrationWithRBAC:
         )
 
         user_context = UserContext(
-            tenant_id="test-tenant",
             user_roles=["employee"],
             user_id="user-002",
         )

@@ -30,7 +30,6 @@ class TestLoadDocuments:
         public_docs = [d for d in documents if d.metadata.classification == Classification.PUBLIC]
         assert len(public_docs) == 1
         assert public_docs[0].metadata.doc_id == "test-public-001"
-        assert public_docs[0].metadata.tenant_id == "test-tenant"
         assert "public" in public_docs[0].metadata.allowed_roles
 
     def test_load_documents_reads_content(self, sample_docs_dir):
@@ -105,7 +104,6 @@ class TestChunkDocuments:
             # Each chunk should have valid metadata
             assert chunk.metadata is not None
             assert chunk.metadata.doc_id is not None
-            assert chunk.metadata.tenant_id == "test-tenant"
             assert chunk.doc_id == chunk.metadata.doc_id
 
     def test_chunk_id_format(self, sample_docs_dir):
