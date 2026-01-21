@@ -21,6 +21,9 @@ class PolicyFlag(str, Enum):
     PII_REFERENCED = "pii_referenced"  # Referenced PII-containing data
     CONFIDENTIAL = "confidential"  # Referenced confidential document
     UNCERTAIN = "uncertain"  # Low confidence in answer
+    GUARDRAIL_BLOCKED = "guardrail_blocked"  # Blocked by input/output guardrail
+    GUARDRAIL_WARNED = "guardrail_warned"  # Warning from guardrail
+    GUARDRAIL_REDACTED = "guardrail_redacted"  # Content was redacted by guardrail
 
 
 class ChunkLevel(str, Enum):

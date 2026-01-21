@@ -155,6 +155,7 @@ rag-enterprise-experiments/
 │       ├── generate.py        # Answer generation with citations
 │       ├── rbac.py            # Role-Based Access Control with mandatory audit
 │       ├── audit.py           # Enterprise audit logging (hash chain)
+│       ├── guardrails.py      # Input/Output guardrails (injection/leakage)
 │       └── prompts.py         # System/user prompt templates
 ├── data/
 │   └── docs/                  # Source documents
@@ -166,6 +167,7 @@ rag-enterprise-experiments/
 ├── tests/                     # Test suite
 │   ├── test_rbac.py           # RBAC filtering tests
 │   ├── test_audit.py          # Audit logging tests
+│   ├── test_guardrails_*.py   # Guardrails tests (detection, mitigation, reproduction)
 │   └── ...
 ├── pyproject.toml             # Project configuration
 ├── Makefile                   # Common commands
@@ -249,7 +251,11 @@ make format
   - Trust boundary aware actor model
   - Sensitive data masking
   - Hash chain persistence across restarts
-- [ ] **Step 5**: Failure modes (Injection / Leakage)
+- [x] **Step 5**: Guardrails (Injection / Leakage)
+  - Input guardrail: Composite scoring injection detection
+  - Output guardrail: Two-lane architecture (sanitize + content)
+  - PII/Secret/Metadata detection and redaction
+  - Classification-based thresholds
 - [ ] **Step 6**: Evals integration
 - [ ] **Step 7**: Remaining failures (Hallucination / Cost / Rate Limiting)
 
@@ -271,16 +277,18 @@ Query + UserContext → Embed → FAISS Search (k×3) → RBAC Filter → Top-K 
                                                    (Role Check)
 ```
 
-### Generation Flow (RAG)
+### Generation Flow (RAG with Guardrails)
 
 ```
-Query + UserContext → Retrieve Top-K → Build Context → LLM Generation → Structured Response
-                           ↓                                  ↓
-                    RBAC Filtering                  {answer, citations, confidence, policy_flags}
+Query + UserContext → [Input Guardrail] → Retrieve Top-K → Build Context → LLM Generation → [Output Guardrail] → Response
+                            ↓                    ↓                                               ↓
+                     Injection Detection    RBAC Filtering                            Leakage Detection/Redaction
+                     (BLOCK/WARN/ALLOW)                                               {answer, citations, confidence, policy_flags}
 ```
 
 **Security features:**
-- Prompt injection prevention via system prompt design
+- **Input Guardrail**: Composite scoring injection detection (pattern, structural, delimiter, anomaly, jailbreak intent)
+- **Output Guardrail**: Two-lane architecture for leakage detection and PII/secret redaction
 - Mandatory citations for all answers
 - Policy flags for PII/confidential data access visibility
 - Confidence scoring for answer reliability
@@ -342,10 +350,48 @@ from src.rag.audit import verify_hash_chain
 is_valid, errors = verify_hash_chain("logs/audit.log")
 ```
 
+### Guardrails
+
+The system includes comprehensive input/output guardrails for security:
+
+#### Input Guardrail (Injection Detection)
+
+Composite scoring approach with 5 detection components:
+
+| Component | Weight | Detection Target |
+|-----------|--------|------------------|
+| Pattern | 0.25 | Known attack phrases ("ignore instructions", "reveal system prompt") |
+| Structural | 0.25 | Instruction-like grammar (imperative verbs, role assignment) |
+| Delimiter | 0.15 | Prompt boundary manipulation (`[system]`, fake markers) |
+| Anomaly | 0.15 | Statistical outliers (excessive length, encoded payloads) |
+| Jailbreak Intent | 0.20 | Bypass intent ("bypass filters", "DAN mode") |
+
+Actions: `ALLOW` → `WARN` → `BLOCK` based on fixed thresholds.
+
+#### Output Guardrail (Leakage Detection)
+
+Two-lane architecture:
+
+1. **Sanitize Lane**: Detects PII, secrets, and metadata
+   - Sets `sanitize_needed` flag → triggers redaction
+   - High-confidence secrets (PEM keys, AWS keys, JWT) → immediate `BLOCK`
+
+2. **Content Lane**: Detects verbatim/substring overlap with source context
+   - Classification-based thresholds (stricter for confidential)
+   - Actions: `ALLOW` → `WARN` → `BLOCK`
+
+Detected patterns are automatically redacted:
+- Email → `[EMAIL REDACTED]`
+- Phone → `[PHONE REDACTED]`
+- SSN → `[SSN REDACTED]`
+- API keys → `[AWS_KEY REDACTED]`, `[GITHUB_TOKEN REDACTED]`
+- doc_id → `[DOC_ID REDACTED]`
+
 ### Planned
 
-- **Prompt injection** detection and mitigation
-- **Data leakage** prevention mechanisms
+- **Hallucination** detection and mitigation
+- **Cost explosion** prevention
+- **Rate limiting** controls
 
 ## License
 

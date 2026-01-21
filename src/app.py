@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from src.rag.config import settings
-from src.rag.generate import generate_with_retrieval
+from src.rag.generate import generate
 from src.rag.ingest import ingest_all
 from src.rag.retrieve import retrieve_hierarchical_with_debug, retrieve_with_debug
 
@@ -68,7 +68,8 @@ def cmd_search(args: argparse.Namespace) -> int:
         if use_hierarchy:
             include_full = args.full if hasattr(args, "full") else False
             results = retrieve_hierarchical_with_debug(
-                query, k * 3, return_parents=k, include_full_parent=include_full, user_context=user_context
+                query, k * 3, return_parents=k,
+                include_full_parent=include_full, user_context=user_context
             )
             print(f"\nFound {results['num_results']} parent chunks:\n")
 
@@ -200,7 +201,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
     print("=" * 60)
 
     try:
-        result = generate_with_retrieval(
+        result = generate(
             query=question,
             k=k,
             use_hierarchical=use_hierarchical,

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from src.rag.config import GuardrailSettings
 from src.rag.models import Classification, DocumentMetadata
 
 
@@ -118,3 +119,32 @@ def long_document_text():
             f"We need enough text to ensure multiple chunks are created.\n"
         )
     return "\n".join(paragraphs)
+
+
+@pytest.fixture
+def guardrail_settings():
+    """Create GuardrailSettings for testing.
+
+    Uses default settings which are suitable for most tests.
+    Individual tests can modify the returned object if needed.
+    """
+    return GuardrailSettings(
+        input_guardrail_enabled=True,
+        output_guardrail_enabled=True,
+        log_guardrail_events=False,  # Disable logging in tests
+        max_query_length=2000,
+        ngram_size=5,
+        # Input guardrail thresholds (individual action thresholds)
+        injection_allow_threshold=0.25,
+        injection_warn_threshold=0.40,
+        injection_block_threshold=0.50,
+        # Output guardrail thresholds (classification-based, individual action thresholds)
+        leakage_thresholds={
+            "public": {"allow": 0.40, "warn": 0.64, "block": 0.80},
+            "internal": {"allow": 0.30, "warn": 0.48, "block": 0.60},
+            "confidential": {"allow": 0.20, "warn": 0.32, "block": 0.40},
+        },
+        default_leakage_allow_threshold=0.30,
+        default_leakage_warn_threshold=0.48,
+        default_leakage_block_threshold=0.60,
+    )
