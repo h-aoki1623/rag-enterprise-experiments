@@ -28,6 +28,7 @@ src/
     ├── generate.py     # Answer generation with citations
     ├── rbac.py         # Role-Based Access Control with mandatory audit
     ├── audit.py        # Enterprise audit logging (hash chain, tamper detection)
+    ├── guardrails.py   # Input/Output guardrails (injection/leakage detection)
     └── prompts.py      # System/user prompt templates
 
 data/docs/              # Source documents (.md + .meta.json)
@@ -183,7 +184,7 @@ Each document consists of a `.md` file paired with a `.meta.json` sidecar file:
 2. ✅ **Step 2**: Generation (with citations)
 3. ✅ **Step 3**: RBAC filter (role-based)
 4. ✅ **Step 4**: Audit logging
-5. ⬜ **Step 5**: Failure modes (Injection / Leakage) - reproduce & mitigate
+5. ✅ **Step 5**: Guardrails (Injection / Leakage) - detect & mitigate
 6. ⬜ **Step 6**: Evals integration
 7. ⬜ **Step 7**: Remaining failures (Hallucination / Cost / Rate Limiting)
 
@@ -200,6 +201,29 @@ Each document consists of a `.md` file paired with a `.meta.json` sidecar file:
 - Test directory: `tests/`
 - Fixtures: `tests/conftest.py`
 - Run: `make test` or `pytest tests/ -v`
+
+## Guardrails Architecture
+
+### Input Guardrail (Injection Detection)
+
+Composite scoring with 5 components (weights: pattern 0.25, structural 0.25, delimiter 0.15, anomaly 0.15, jailbreak_intent 0.20):
+
+- Fixed threshold (not classification-based) for security
+- Actions: ALLOW → WARN → BLOCK
+
+### Output Guardrail (Leakage Detection)
+
+Two-lane architecture:
+
+1. **Sanitize Lane**: PII/Secret/Metadata detection
+   - Sets `sanitize_needed` flag → caller calls `redact()` if True
+   - High-confidence secrets (PEM, AWS key, JWT) → immediate BLOCK
+
+2. **Content Lane**: Verbatim/substring overlap detection
+   - Classification-based thresholds (stricter for confidential)
+   - Actions: ALLOW → WARN → BLOCK
+
+Key design principle: `check()` for inspection, `redact()` for transformation (separation of concerns).
 
 ## Notes
 

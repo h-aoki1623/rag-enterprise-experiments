@@ -1,5 +1,18 @@
-"""Generation layer for RAG system."""
+"""Generation layer for RAG system.
 
+This module provides answer generation with integrated guardrails:
+
+Pipeline flow:
+    User Input → [Input Guardrail] → Retrieve → RBAC filter → LLM call → [Output Guardrail] → Answer
+
+The generate() function orchestrates the full RAG pipeline including:
+- Input Guardrail: Checks queries for injection attacks before retrieval
+- Retrieval: Vector search with RBAC filtering
+- LLM call: Answer generation with Claude
+- Output Guardrail: Checks responses for data leakage before returning
+"""
+
+import hashlib
 import json
 import time
 from typing import TYPE_CHECKING, Union
@@ -7,13 +20,16 @@ from typing import TYPE_CHECKING, Union
 import anthropic
 
 from .audit import (
+    AuditSeverity,
     GenerationEvent,
+    GuardrailAuditEvent,
     create_actor_from_user_context,
     generate_request_id,
     get_audit_logger,
     hash_query,
 )
 from .config import settings
+from .guardrails import GuardrailAction, GuardrailResult, InputGuardrail, OutputGuardrail
 from .models import (
     Citation,
     Classification,
@@ -100,23 +116,187 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def _get_max_classification(
+    contexts: list[RetrievalResult] | list[HierarchicalRetrievalResult],
+) -> Classification:
+    """Get the highest classification level from contexts.
+
+    Args:
+        contexts: List of retrieval results.
+
+    Returns:
+        Highest Classification level (confidential > internal > public).
+    """
+    if not contexts:
+        return Classification.PUBLIC
+
+    classification_order = {
+        Classification.PUBLIC: 0,
+        Classification.INTERNAL: 1,
+        Classification.CONFIDENTIAL: 2,
+    }
+
+    max_classification = Classification.PUBLIC
+
+    for ctx in contexts:
+        if isinstance(ctx, HierarchicalRetrievalResult):
+            classification = ctx.parent_chunk.metadata.classification
+        else:
+            classification = ctx.chunk.metadata.classification
+
+        if classification_order[classification] > classification_order[max_classification]:
+            max_classification = classification
+
+    return max_classification
+
+
+def _log_guardrail_event(
+    request_id: str,
+    result: GuardrailResult,
+    user_context: "UserContext | None",
+    query: str,
+    contexts: list[RetrievalResult] | list[HierarchicalRetrievalResult] | None = None,
+) -> None:
+    """Log a guardrail audit event.
+
+    Args:
+        request_id: Correlation ID.
+        result: GuardrailResult from check.
+        user_context: User context for actor info.
+        query: User query (will be hashed).
+        contexts: Retrieval contexts (for doc fingerprint). None for input guardrail.
+    """
+    if not settings.guardrails.log_guardrail_events:
+        return
+
+    contexts = contexts or []
+
+    audit_logger = get_audit_logger()
+    actor = create_actor_from_user_context(user_context, auth_method="cli")
+
+    # Create doc fingerprint from doc_ids
+    doc_ids = []
+    classifications = []
+    for ctx in contexts:
+        if isinstance(ctx, HierarchicalRetrievalResult):
+            doc_ids.append(ctx.parent_chunk.doc_id)
+            classifications.append(ctx.parent_chunk.metadata.classification.value)
+        else:
+            doc_ids.append(ctx.chunk.doc_id)
+            classifications.append(ctx.chunk.metadata.classification.value)
+
+    doc_fingerprint = hashlib.sha256(":".join(sorted(doc_ids)).encode()).hexdigest()[:16] if doc_ids else None
+
+    # Determine severity based on action
+    severity = AuditSeverity.INFO
+    if result.action == GuardrailAction.WARN:
+        severity = AuditSeverity.WARN
+    elif result.action in (GuardrailAction.REDACT, GuardrailAction.BLOCK):
+        severity = AuditSeverity.ERROR
+
+    # Extract detection stats from score_breakdown
+    score_breakdown = result.score_breakdown
+    matched_pattern_count = 0
+    pii_count = 0
+    verbatim = None
+
+    if result.guardrail_type == "input":
+        # Sum up pattern-related scores as indicator
+        if score_breakdown.get("pattern_score", 0) > 0:
+            matched_pattern_count += 1
+        if score_breakdown.get("structural_score", 0) > 0:
+            matched_pattern_count += 1
+        if score_breakdown.get("delimiter_score", 0) > 0:
+            matched_pattern_count += 1
+    else:  # output
+        pii_count = score_breakdown.get("pii_detected_count", 0)
+        verbatim = score_breakdown.get("verbatim_ratio")
+
+    event = GuardrailAuditEvent(
+        request_id=request_id,
+        actor=actor,
+        severity=severity,
+        guardrail_type=result.guardrail_type,
+        threat_type=result.threat_type,
+        threat_score=result.threat_score,
+        action_taken=result.action.value,
+        score_breakdown=score_breakdown,
+        input_hash=hash_query(query),
+        input_length=len(query),
+        doc_set_fingerprint=doc_fingerprint,
+        doc_count=len(contexts),
+        classifications_involved=list(set(classifications)),
+        model_id=settings.anthropic_model,
+        matched_pattern_count=matched_pattern_count,
+        pii_detected_count=pii_count,
+        verbatim_ratio=verbatim,
+    )
+    audit_logger.log(event)
+
+
+def _call_llm(
+    client: anthropic.Anthropic,
+    user_prompt: str,
+    max_tokens: int,
+) -> tuple[str, int | None]:
+    """
+    Internal helper: Pure LLM call without guardrails.
+
+    Args:
+        client: Anthropic client.
+        user_prompt: Formatted user prompt.
+        max_tokens: Maximum tokens for generation.
+
+    Returns:
+        Tuple of (response_text, output_token_count).
+
+    Raises:
+        anthropic.APIError: If API call fails.
+    """
+    message = client.messages.create(
+        model=settings.anthropic_model,
+        max_tokens=max_tokens,
+        temperature=settings.generation_temperature,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    # Extract token usage if available
+    output_tokens = None
+    if hasattr(message, "usage"):
+        output_tokens = message.usage.output_tokens
+
+    # Extract response text
+    response_text = message.content[0].text
+
+    return response_text, output_tokens
+
+
 def generate(
     query: str,
-    contexts: Union[list[RetrievalResult], list[HierarchicalRetrievalResult]],
+    k: int | None = None,
+    use_hierarchical: bool = False,
     max_tokens: int | None = None,
     client: anthropic.Anthropic | None = None,
     user_context: "UserContext | None" = None,
     request_id: str | None = None,
 ) -> GenerationResult:
     """
-    Generate an answer based on retrieval results.
+    Full RAG pipeline: Input Guardrail → Retrieve → LLM → Output Guardrail.
+
+    This function orchestrates the complete RAG pipeline:
+    1. Input Guardrail: Check query for injection attacks (BEFORE retrieval)
+    2. Retrieve: Vector search with RBAC filtering
+    3. LLM Call: Generate answer with citations
+    4. Output Guardrail: Check response for data leakage
 
     Args:
         query: User's question.
-        contexts: List of retrieval results (flat or hierarchical).
+        k: Number of chunks to retrieve. Defaults to settings value.
+        use_hierarchical: Whether to use hierarchical retrieval.
         max_tokens: Maximum tokens for generation. Defaults to settings value.
         client: Optional pre-configured Anthropic client.
-        user_context: User context for audit logging.
+        user_context: User context for RBAC filtering. None = public-only access.
         request_id: Optional correlation ID for audit logging.
 
     Returns:
@@ -126,6 +306,8 @@ def generate(
         ValueError: If API key is not configured or response parsing fails.
         anthropic.APIError: If API call fails.
     """
+    from .retrieve import retrieve, retrieve_hierarchical
+
     start_time = time.perf_counter()
 
     # Generate request_id if not provided
@@ -135,18 +317,50 @@ def generate(
     # Get audit logger
     audit_logger = get_audit_logger()
 
-    # Validate API key
-    if not settings.anthropic_api_key and client is None:
-        raise ValueError(
-            "Anthropic API key not configured. Set ANTHROPIC_API_KEY in .env file."
+    # Initialize guardrails
+    input_guardrail = InputGuardrail(settings.guardrails)
+    output_guardrail = OutputGuardrail(settings.guardrails)
+
+    # ============================================
+    # STEP 1: INPUT GUARDRAIL - Check query BEFORE retrieval
+    # ============================================
+    # Note: Input guardrail uses a fixed threshold regardless of document
+    # classification. This is a security design decision - if a user account
+    # is compromised, varying thresholds by role would be exploitable.
+    input_result = input_guardrail.check(query)
+
+    if input_result.action == GuardrailAction.BLOCK:
+        _log_guardrail_event(request_id, input_result, user_context, query, None)
+        return GenerationResult(
+            answer="Your request could not be processed due to security policy.",
+            citations=[],
+            confidence=0.0,
+            policy_flags=[PolicyFlag.GUARDRAIL_BLOCKED],
+            raw_context_used=False,
         )
 
-    # Initialize client if not provided
-    if client is None:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    # Initialize policy flags early (before WARN check)
+    policy_flags: list[PolicyFlag] = []
 
-    # Pre-compute policy flags from context
-    policy_flags = _compute_policy_flags(contexts)
+    if input_result.action == GuardrailAction.WARN:
+        policy_flags.append(PolicyFlag.GUARDRAIL_WARNED)
+        _log_guardrail_event(request_id, input_result, user_context, query, None)
+
+    # ============================================
+    # STEP 2: RETRIEVE - Vector search with RBAC filtering
+    # ============================================
+    if use_hierarchical:
+        contexts: Union[list[RetrievalResult], list[HierarchicalRetrievalResult]] = (
+            retrieve_hierarchical(query, k, user_context=user_context, request_id=request_id)
+        )
+    else:
+        contexts = retrieve(query, k, user_context=user_context, request_id=request_id)
+
+    # Determine classification for output guardrail (highest sensitivity in contexts)
+    max_classification = _get_max_classification(contexts)
+
+    # Add policy flags from context metadata
+    policy_flags.extend(_compute_policy_flags(contexts))
 
     # Build prompts
     user_prompt = build_user_prompt(query, contexts)
@@ -166,22 +380,21 @@ def generate(
     citations: list[Citation] = []
     answer = ""
 
-    try:
-        # Call Anthropic API
-        message = client.messages.create(
-            model=settings.anthropic_model,
-            max_tokens=max_tokens,
-            temperature=settings.generation_temperature,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+    # Validate API key
+    if not settings.anthropic_api_key and client is None:
+        raise ValueError(
+            "Anthropic API key not configured. Set ANTHROPIC_API_KEY in .env file."
         )
 
-        # Extract token usage if available
-        if hasattr(message, "usage"):
-            output_token_estimate = message.usage.output_tokens
+    # Initialize client if not provided
+    if client is None:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-        # Extract response text
-        response_text = message.content[0].text
+    try:
+        # ============================================
+        # STEP 3: LLM CALL - Generate answer
+        # ============================================
+        response_text, output_token_estimate = _call_llm(client, user_prompt, max_tokens)
 
         # Parse JSON response
         parsed = _parse_llm_response(response_text)
@@ -212,6 +425,57 @@ def generate(
 
         answer = parsed.get("answer", "")
 
+        # ============================================
+        # STEP 4: OUTPUT GUARDRAIL - Check response for leakage
+        # ============================================
+        context_texts = [
+            (
+                ctx.parent_chunk.text
+                if isinstance(ctx, HierarchicalRetrievalResult)
+                else ctx.chunk.text
+            )
+            for ctx in contexts
+        ]
+        doc_metadata = [
+            {
+                "doc_id": (
+                    ctx.parent_chunk.doc_id
+                    if isinstance(ctx, HierarchicalRetrievalResult)
+                    else ctx.chunk.doc_id
+                ),
+                "classification": (
+                    ctx.parent_chunk.metadata.classification.value
+                    if isinstance(ctx, HierarchicalRetrievalResult)
+                    else ctx.chunk.metadata.classification.value
+                ),
+            }
+            for ctx in contexts
+        ]
+
+        output_result = output_guardrail.check(
+            answer, context_texts, doc_metadata, max_classification
+        )
+
+        if output_result.action == GuardrailAction.BLOCK:
+            _log_guardrail_event(request_id, output_result, user_context, query, contexts)
+            return GenerationResult(
+                answer="The response was blocked due to security policy.",
+                citations=[],
+                confidence=0.0,
+                policy_flags=[PolicyFlag.GUARDRAIL_BLOCKED],
+                raw_context_used=bool(contexts),
+            )
+
+        # Sanitize lane: redact if sanitize_needed (PII/metadata detected)
+        if output_result.details.get("sanitize_needed", False):
+            answer = output_guardrail.redact(answer, output_result, doc_metadata)
+            policy_flags.append(PolicyFlag.GUARDRAIL_REDACTED)
+            _log_guardrail_event(request_id, output_result, user_context, query, contexts)
+
+        if output_result.action == GuardrailAction.WARN:
+            policy_flags.append(PolicyFlag.GUARDRAIL_WARNED)
+            _log_guardrail_event(request_id, output_result, user_context, query, contexts)
+
     except anthropic.APIStatusError as e:
         # Handle API errors - check for content filtering / refusal
         refusal = True
@@ -227,11 +491,18 @@ def generate(
         latency_ms = (time.perf_counter() - start_time) * 1000
 
         # Check PII access in contexts
-        pii_accessed = any(
-            (ctx.parent_chunk.metadata.pii_flag if isinstance(ctx, HierarchicalRetrievalResult)
-             else ctx.chunk.metadata.pii_flag)
-            for ctx in contexts
-        ) if contexts else False
+        pii_accessed = (
+            any(
+                (
+                    ctx.parent_chunk.metadata.pii_flag
+                    if isinstance(ctx, HierarchicalRetrievalResult)
+                    else ctx.chunk.metadata.pii_flag
+                )
+                for ctx in contexts
+            )
+            if contexts
+            else False
+        )
 
         actor = create_actor_from_user_context(user_context, auth_method="cli")
         event = GenerationEvent(
@@ -262,6 +533,7 @@ def generate(
     )
 
 
+# Legacy alias for backward compatibility
 def generate_with_retrieval(
     query: str,
     k: int | None = None,
@@ -271,28 +543,22 @@ def generate_with_retrieval(
     request_id: str | None = None,
 ) -> GenerationResult:
     """
-    Convenience function: retrieve then generate with RBAC filtering.
+    Legacy alias for generate().
 
-    Args:
-        query: User's question.
-        k: Number of chunks to retrieve.
-        use_hierarchical: Whether to use hierarchical retrieval.
-        client: Optional pre-configured Anthropic client.
-        user_context: User context for RBAC filtering. None = public-only access.
-        request_id: Optional correlation ID for audit logging.
-
-    Returns:
-        GenerationResult.
+    .. deprecated::
+        Use generate() instead. This function will be removed in a future version.
     """
-    from .retrieve import retrieve, retrieve_hierarchical
-
-    # Generate request_id to correlate retrieval and generation
-    if request_id is None:
-        request_id = generate_request_id()
-
-    if use_hierarchical:
-        contexts = retrieve_hierarchical(query, k, user_context=user_context, request_id=request_id)
-    else:
-        contexts = retrieve(query, k, user_context=user_context, request_id=request_id)
-
-    return generate(query, contexts, client=client, user_context=user_context, request_id=request_id)
+    import warnings
+    warnings.warn(
+        "generate_with_retrieval() is deprecated. Use generate() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return generate(
+        query=query,
+        k=k,
+        use_hierarchical=use_hierarchical,
+        client=client,
+        user_context=user_context,
+        request_id=request_id,
+    )

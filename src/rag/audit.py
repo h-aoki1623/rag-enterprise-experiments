@@ -40,6 +40,9 @@ class AuditEventType(str, Enum):
     GENERATION_COMPLETE = "generation_complete"
     INGESTION_COMPLETE = "ingestion_complete"
 
+    # Guardrail Events
+    GUARDRAIL_EVENT = "guardrail_event"
+
     # Error Events (minimal info only)
     ERROR = "error"
 
@@ -60,6 +63,7 @@ class AuditComponent(str, Enum):
     RETRIEVE = "retrieve"
     GENERATE = "generate"
     INGEST = "ingest"
+    GUARDRAILS = "guardrails"
 
 
 class AuditAction(str, Enum):
@@ -69,6 +73,7 @@ class AuditAction(str, Enum):
     RETRIEVE = "retrieve"
     GENERATE = "generate"
     INGEST = "ingest"
+    GUARDRAIL_CHECK = "guardrail_check"
 
 
 class DenialReason(str, Enum):
@@ -227,6 +232,42 @@ class IngestionEvent(AuditEvent):
     chunks_created: int
     failure_count: int = 0
     doc_ids_sample: list[str] = Field(default_factory=list)  # First few doc_ids
+
+
+class GuardrailAuditEvent(AuditEvent):
+    """Guardrail-related audit event.
+
+    Logs input/output guardrail checks for security monitoring.
+    Does not log raw content by default - uses hashes and statistics.
+    """
+
+    event_type: AuditEventType = AuditEventType.GUARDRAIL_EVENT
+    component: AuditComponent = AuditComponent.GUARDRAILS
+    action: AuditAction = AuditAction.GUARDRAIL_CHECK
+
+    # Required fields
+    guardrail_type: str  # "input" or "output"
+    threat_type: Optional[str] = None
+    threat_score: float = 0.0
+    action_taken: str  # "allow" | "warn" | "redact" | "block"
+
+    # Score breakdown (for post-analysis)
+    score_breakdown: dict = Field(default_factory=dict)
+
+    # Context info (no raw data)
+    input_hash: Optional[str] = None  # Query hash
+    input_length: Optional[int] = None
+    doc_set_fingerprint: Optional[str] = None  # Hash of doc_ids
+    doc_count: int = 0
+    classifications_involved: list[str] = Field(default_factory=list)
+
+    # Model info
+    model_id: Optional[str] = None
+
+    # Detection details (masked)
+    matched_pattern_count: int = 0
+    pii_detected_count: int = 0
+    verbatim_ratio: Optional[float] = None
 
 
 # =============================================================================
