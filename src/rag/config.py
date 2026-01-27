@@ -166,6 +166,51 @@ class AuditSettings(BaseModel):
         return self.log_dir / self.log_file
 
 
+class EvalSettings(BaseModel):
+    """Evaluation framework configuration.
+
+    This model configures thresholds and parameters for the evaluation
+    framework across different perspectives (retrieval, context quality,
+    groundedness, safety, pipeline).
+    """
+
+    # Groundedness evaluation settings - algorithm parameters
+    claim_overlap_threshold: float = Field(
+        default=0.3,
+        description="Minimum n-gram overlap ratio for claim-context match (assertions)",
+    )
+    inference_threshold_ratio: float = Field(
+        default=0.7,
+        description="Ratio applied to claim_overlap_threshold for inference claims (more lenient)",
+    )
+
+    # Groundedness evaluation settings - success criteria thresholds
+    min_claim_support_rate: float = Field(
+        default=0.85,
+        description="Minimum claim support rate for success (0.0-1.0)",
+    )
+    min_citation_validity_form: float = Field(
+        default=0.95,
+        description="Minimum citation validity (form) rate for success (0.0-1.0)",
+    )
+
+    # Context quality evaluation settings
+    redundancy_threshold: float = Field(
+        default=0.5,
+        description="N-gram overlap threshold for detecting redundant chunks",
+    )
+    tfidf_similarity_threshold: float = Field(
+        default=0.8,
+        description="TF-IDF cosine similarity threshold for paraphrase redundancy",
+    )
+
+    # Retrieval evaluation settings
+    retrieval_k_values: list[int] = Field(
+        default=[1, 3, 5, 10],
+        description="Values of k for @k metrics (Recall@k, Precision@k, NDCG@k)",
+    )
+
+
 class Settings(BaseSettings):
     """RAG system configuration."""
 
@@ -269,6 +314,12 @@ class Settings(BaseSettings):
     guardrails: GuardrailSettings = Field(
         default_factory=GuardrailSettings,
         description="Guardrails configuration for security",
+    )
+
+    # Evaluation settings (nested)
+    evals: EvalSettings = Field(
+        default_factory=EvalSettings,
+        description="Evaluation framework configuration",
     )
 
     model_config = SettingsConfigDict(

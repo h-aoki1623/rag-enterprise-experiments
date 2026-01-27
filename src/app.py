@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 from src.rag.config import settings
 from src.rag.generate import generate
@@ -176,6 +177,133 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Run evaluation suite."""
+    from src.rag.evals.models import EvalPerspective
+    from src.rag.evals.report import ReportGenerator
+    from src.rag.evals.runner import EvalRunner
+
+    # Parse perspectives
+    perspectives: Optional[list[EvalPerspective]] = None
+    if args.perspective and args.perspective != "all":
+        perspective_names = args.perspective.split(",")
+        perspectives = []
+        valid_perspectives = {p.value: p for p in EvalPerspective}
+        for name in perspective_names:
+            name = name.strip().lower()
+            if name in valid_perspectives:
+                perspectives.append(valid_perspectives[name])
+            else:
+                print(f"Error: Unknown perspective '{name}'", file=sys.stderr)
+                print(f"Valid perspectives: {', '.join(valid_perspectives.keys())}", file=sys.stderr)
+                return 1
+
+    # Setup runner
+    runner = EvalRunner(
+        fixtures_dir=Path(args.fixtures_dir) if args.fixtures_dir else None,
+        traces_dir=Path(args.traces_dir) if args.traces_dir else None,
+    )
+
+    print("=" * 60)
+    print("Running Evaluation Suite")
+    print("=" * 60)
+    if perspectives:
+        print(f"  Perspectives: {', '.join(p.value for p in perspectives)}")
+    else:
+        print("  Perspectives: all")
+    print(f"  Suite: {args.suite}")
+    print(f"  Save traces: {args.save_trace}")
+    if args.verbose:
+        print(f"  Verbose: enabled")
+    print("=" * 60)
+    print()
+
+    try:
+        # Run evaluations
+        summaries = runner.run(
+            perspectives=perspectives,
+            suite=args.suite,
+            save_trace=args.save_trace,
+            verbose=args.verbose,
+        )
+
+        if not summaries:
+            print("No evaluation results generated.")
+            return 1
+
+        # Generate reports
+        report_gen = ReportGenerator(
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+        )
+
+        # Load baseline if provided
+        baseline = None
+        if args.baseline:
+            baseline_path = Path(args.baseline)
+            if baseline_path.exists():
+                baseline = report_gen.load_baseline(baseline_path)
+                print(f"Loaded baseline from: {baseline_path}")
+            else:
+                print(f"Warning: Baseline file not found: {baseline_path}", file=sys.stderr)
+
+        # Generate reports
+        report_name = args.output if args.output else None
+        json_path = report_gen.generate_json_report(summaries, report_name, baseline)
+        md_path = report_gen.generate_markdown_report(summaries, report_name, baseline)
+
+        # Print summary
+        print("\n" + "=" * 60)
+        print("Evaluation Summary")
+        print("=" * 60)
+
+        total_cases = sum(s.total_cases for s in summaries)
+        total_passed = sum(s.passed_cases for s in summaries)
+        overall_rate = total_passed / total_cases * 100 if total_cases > 0 else 0
+
+        print(f"\n  Overall: {total_passed}/{total_cases} ({overall_rate:.1f}%)")
+        print()
+
+        # Per-perspective summary
+        for summary in summaries:
+            rate = summary.passed_cases / summary.total_cases * 100 if summary.total_cases > 0 else 0
+            status = "✓" if rate >= 80 else "✗"
+            print(f"  {status} {summary.perspective.value}: {summary.passed_cases}/{summary.total_cases} ({rate:.1f}%)")
+
+            # Show key metrics if verbose
+            if args.verbose and summary.aggregate_metrics:
+                for metric, value in list(summary.aggregate_metrics.items())[:3]:
+                    if isinstance(value, float):
+                        print(f"      {metric}: {value:.4f}")
+                    else:
+                        print(f"      {metric}: {value}")
+
+        print()
+        print(f"  Reports generated:")
+        print(f"    JSON: {json_path}")
+        print(f"    Markdown: {md_path}")
+
+        if args.save_trace:
+            print(f"    Traces: {runner.traces_dir}/")
+
+        print("=" * 60)
+
+        # Return non-zero if any perspective failed
+        if overall_rate < 100:
+            return 1 if overall_rate < 50 else 0
+        return 0
+
+    except FileNotFoundError as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        print("Make sure fixtures exist in tests/fixtures/evals/", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\nError during evaluation: {e}", file=sys.stderr)
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     """Ask a question using RAG."""
     from src.rag.models import UserContext
@@ -343,6 +471,57 @@ def main() -> int:
         help="Comma-separated list of user roles (e.g., 'employee,contractor')",
     )
 
+    # Eval command
+    eval_parser = subparsers.add_parser("eval", help="Run evaluation suite")
+    eval_parser.add_argument(
+        "--perspective",
+        type=str,
+        default="all",
+        help="Perspectives to evaluate: retrieval,context_quality,groundedness,safety,pipeline,all (default: all)",
+    )
+    eval_parser.add_argument(
+        "--suite",
+        type=str,
+        choices=["smoke", "full"],
+        default="full",
+        help="Suite to run: smoke (fast) or full (default: full)",
+    )
+    eval_parser.add_argument(
+        "--save-trace",
+        action="store_true",
+        help="Save execution traces for failed cases",
+    )
+    eval_parser.add_argument(
+        "--output",
+        type=str,
+        help="Report name (default: auto-generated timestamp)",
+    )
+    eval_parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Directory for reports (default: reports/evals)",
+    )
+    eval_parser.add_argument(
+        "--baseline",
+        type=str,
+        help="Path to baseline JSON report for regression detection",
+    )
+    eval_parser.add_argument(
+        "--fixtures-dir",
+        type=str,
+        help="Directory containing eval fixtures (default: tests/fixtures/evals)",
+    )
+    eval_parser.add_argument(
+        "--traces-dir",
+        type=str,
+        help="Directory to save traces (default: traces)",
+    )
+    eval_parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Verbose output",
+    )
+
     args = parser.parse_args()
 
     if args.command == "ingest":
@@ -353,6 +532,8 @@ def main() -> int:
         return cmd_info(args)
     elif args.command == "ask":
         return cmd_ask(args)
+    elif args.command == "eval":
+        return cmd_eval(args)
     else:
         parser.print_help()
         return 0

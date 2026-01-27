@@ -1,0 +1,10 @@
+{"case_id": "q001", "query": "What is the vacation policy?", "user_roles": ["employee"], "query_type": "faq"}
+{"case_id": "q002", "query": "How do I request time off?", "user_roles": ["employee"], "query_type": "faq"}
+{"case_id": "q003", "query": "What are the health insurance options?", "user_roles": ["employee"], "query_type": "faq"}
+{"case_id": "q004", "query": "Compare our 401k plans with industry standards", "user_roles": ["employee", "executive"], "query_type": "comparison"}
+{"case_id": "q005", "query": "What is the remote work policy?", "user_roles": ["employee"], "query_type": "faq"}
+{"case_id": "q006", "query": "How does parental leave work?", "user_roles": ["employee"], "query_type": "faq"}
+{"case_id": "q007", "query": "What cybersecurity protocols should I follow?", "user_roles": ["employee"], "query_type": "faq"}
+{"case_id": "q008", "query": "Research best practices for employee onboarding", "user_roles": ["employee", "executive"], "query_type": "research"}
+{"case_id": "q009", "query": "What is the expense reimbursement process?", "user_roles": ["employee"], "query_type": "faq"}
+{"case_id": "q010", "query": "How do I access confidential documents?", "user_roles": ["executive"], "query_type": "faq"}

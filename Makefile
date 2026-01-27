@@ -1,4 +1,4 @@
-.PHONY: install dev-install ingest search info clean test lint format help
+.PHONY: install dev-install ingest search info clean test lint format help eval eval-smoke
 
 # Default target
 help:
@@ -9,6 +9,8 @@ help:
 	@echo "  make ingest       Run document ingestion"
 	@echo "  make search Q=    Search with query (e.g., make search Q='vacation policy')"
 	@echo "  make info         Show system information"
+	@echo "  make eval         Run full evaluation suite"
+	@echo "  make eval-smoke   Run smoke evaluation suite (fast)"
 	@echo "  make clean        Remove index files"
 	@echo "  make test         Run tests"
 	@echo "  make lint         Run linter"
@@ -35,6 +37,13 @@ endif
 
 info:
 	python -m src.app info
+
+# Evaluation
+eval:
+	python -m src.app eval
+
+eval-smoke:
+	python -m src.app eval --suite smoke
 
 # Cleanup
 clean:

@@ -135,7 +135,54 @@ JSON output format:
 }
 ```
 
-#### 4. View System Info
+#### 4. Run Evaluations
+
+```bash
+# Run all evaluations (full suite)
+python -m src.app eval
+
+# Run specific perspectives
+python -m src.app eval --perspective retrieval,safety
+
+# Smoke test (fast, for CI/PR checks)
+python -m src.app eval --suite smoke
+
+# Save execution traces for failed cases
+python -m src.app eval --save-trace -v
+
+# Compare against baseline for regression detection
+python -m src.app eval --baseline reports/evals/previous_report.json
+```
+
+Example output:
+```
+============================================================
+Running Evaluation Suite
+============================================================
+  Perspectives: all
+  Suite: full
+  Save traces: False
+============================================================
+
+============================================================
+Evaluation Summary
+============================================================
+
+  Overall: 45/50 (90.0%)
+
+  ✓ retrieval: 9/10 (90.0%)
+  ✓ context_quality: 8/10 (80.0%)
+  ✓ groundedness: 9/10 (90.0%)
+  ✓ safety: 10/10 (100.0%)
+  ✓ pipeline: 9/10 (90.0%)
+
+  Reports generated:
+    JSON: reports/evals/eval_report_20260122_143052.json
+    Markdown: reports/evals/eval_report_20260122_143052.md
+============================================================
+```
+
+#### 5. View System Info
 
 ```bash
 python -m src.app info
@@ -156,7 +203,17 @@ rag-enterprise-experiments/
 │       ├── rbac.py            # Role-Based Access Control with mandatory audit
 │       ├── audit.py           # Enterprise audit logging (hash chain)
 │       ├── guardrails.py      # Input/Output guardrails (injection/leakage)
-│       └── prompts.py         # System/user prompt templates
+│       ├── prompts.py         # System/user prompt templates
+│       └── evals/             # Evaluation framework
+│           ├── models.py      # Eval data models (cases, results, traces)
+│           ├── metrics.py     # Metric calculations (MRR, NDCG, AUC, etc.)
+│           ├── retrieval_evals.py      # A. Retrieval evaluation
+│           ├── context_quality_evals.py # B. Context quality evaluation
+│           ├── groundedness_evals.py   # C. Groundedness evaluation
+│           ├── safety_evals.py         # E. Safety evaluation
+│           ├── pipeline_evals.py       # F. Pipeline evaluation
+│           ├── runner.py      # EvalRunner orchestrator
+│           └── report.py      # Report generation (JSON/Markdown)
 ├── data/
 │   └── docs/                  # Source documents
 │       ├── public/            # Public documents
@@ -164,11 +221,20 @@ rag-enterprise-experiments/
 │       └── confidential/      # Confidential documents
 ├── indexes/                   # Generated FAISS index
 ├── logs/                      # Audit logs (hash-chained JSON)
+├── reports/evals/             # Generated evaluation reports
+├── traces/                    # Execution traces for debugging
 ├── tests/                     # Test suite
 │   ├── test_rbac.py           # RBAC filtering tests
 │   ├── test_audit.py          # Audit logging tests
 │   ├── test_guardrails_*.py   # Guardrails tests (detection, mitigation, reproduction)
+│   ├── test_evals.py          # Evaluation framework tests
 │   └── ...
+│   └── fixtures/evals/        # Evaluation fixtures
+│       ├── cases.jsonl        # Base evaluation cases
+│       ├── retrieval_labels.jsonl
+│       ├── context_labels.jsonl
+│       ├── groundedness_labels.jsonl
+│       └── pipeline_labels.jsonl
 ├── pyproject.toml             # Project configuration
 ├── Makefile                   # Common commands
 └── README.md
@@ -232,6 +298,8 @@ make format
 | `make lint` | Run linter |
 | `make format` | Format code |
 | `make clean` | Remove index files |
+| `make eval` | Run full evaluation suite |
+| `make eval-smoke` | Run smoke evaluation suite |
 
 ## Implementation Roadmap
 
@@ -256,7 +324,11 @@ make format
   - Output guardrail: Two-lane architecture (sanitize + content)
   - PII/Secret/Metadata detection and redaction
   - Classification-based thresholds
-- [ ] **Step 6**: Evals integration
+- [x] **Step 6**: Evals integration
+  - Perspective-based evaluation framework (Retrieval, Context Quality, Groundedness, Safety, Pipeline)
+  - Heuristic metrics (no LLM calls) for cost-free CI runs
+  - JSON/Markdown report generation with regression detection
+  - CLI integration with smoke/full suite modes
 - [ ] **Step 7**: Remaining failures (Hallucination / Cost / Rate Limiting)
 
 ## Architecture
@@ -386,6 +458,85 @@ Detected patterns are automatically redacted:
 - SSN → `[SSN REDACTED]`
 - API keys → `[AWS_KEY REDACTED]`, `[GITHUB_TOKEN REDACTED]`
 - doc_id → `[DOC_ID REDACTED]`
+
+### Evaluation Framework
+
+The system includes a comprehensive evaluation framework organized by **evaluation perspective** for clear diagnosis (e.g., "retrieval is good but groundedness is bad" → focus on prompt engineering).
+
+#### Evaluation Perspectives
+
+| Perspective | Description | Key Metrics |
+|-------------|-------------|-------------|
+| **A. Retrieval** | How well does search find relevant documents? | NDCG@k (primary), MRR, Recall@k, Precision@k |
+| **B. Context Quality** | Is the retrieved context useful? | Redundancy ratio, fact dispersion, unique token ratio |
+| **C. Groundedness** | Is the answer supported by context? | Claim support rate, citation validity, numeric fabrication |
+| **E. Safety** | Are guardrails effective? | AUC, TPR@FPR=1%, TPR@FPR=5% |
+| **F. Pipeline** | End-to-end integration | Outcome validation, latency budgets, RBAC impact |
+
+Note: D. Answer Quality (LLM-as-Judge) is deferred to Step 7.
+
+#### Metric Targets
+
+| Perspective | Metric | Target |
+|-------------|--------|--------|
+| Retrieval | NDCG@5 | > 0.6 |
+| Retrieval | Recall@5 | > 0.7 |
+| Context Quality | Redundancy Ratio | < 0.2 |
+| Groundedness | Claim Support Rate | > 0.85 |
+| Groundedness | Citation Validity (form) | > 0.95 |
+| Safety | AUC (injection) | > 0.85 |
+| Safety | TPR@FPR=1% | > 0.7 |
+| Pipeline | Pass Rate | > 0.9 |
+
+#### Design Principles
+
+1. **Heuristic-based**: All metrics use computational methods (no LLM calls) for cost-free CI runs
+2. **Query-centric fixtures**: Shared `case_id` across perspective-specific label files
+3. **Trace storage**: Failed cases save execution traces for debugging
+4. **Regression detection**: Compare against baseline reports for detecting regressions
+5. **Diagnostic guidance**: Reports include actionable recommendations based on pass/fail patterns
+
+#### CLI Options
+
+```bash
+python -m src.app eval [OPTIONS]
+
+Options:
+  --perspective TEXT     Perspectives: retrieval,context_quality,groundedness,
+                         safety,pipeline,all (default: all)
+  --suite {smoke,full}   Suite mode: smoke (fast) or full (default: full)
+  --save-trace           Save execution traces for failed cases
+  --output TEXT          Report name (default: auto-generated timestamp)
+  --baseline PATH        Path to baseline JSON report for regression detection
+  -v, --verbose          Verbose output with detailed metrics
+```
+
+#### Configurable Thresholds (EvalSettings)
+
+Evaluation thresholds can be tuned via environment variables:
+
+```bash
+# Algorithm parameters
+EVALS__CLAIM_OVERLAP_THRESHOLD=0.3       # Minimum n-gram overlap for claim-context match
+EVALS__INFERENCE_THRESHOLD_RATIO=0.7     # Relaxation ratio for inference claims
+
+# Success criteria thresholds
+EVALS__MIN_CLAIM_SUPPORT_RATE=0.85       # Minimum claim support rate for success
+EVALS__MIN_CITATION_VALIDITY_FORM=0.95   # Minimum citation validity (form) for success
+
+# Context quality parameters
+EVALS__REDUNDANCY_THRESHOLD=0.5          # N-gram overlap threshold for redundancy detection
+EVALS__TFIDF_SIMILARITY_THRESHOLD=0.8    # TF-IDF cosine similarity threshold
+
+# Retrieval parameters
+EVALS__RETRIEVAL_K_VALUES=[1,3,5,10]     # Values of k for @k metrics
+```
+
+Example usage:
+```bash
+# Run evals with stricter claim support rate
+EVALS__MIN_CLAIM_SUPPORT_RATE=0.90 python -m src.app eval --perspective groundedness
+```
 
 ### Planned
 
