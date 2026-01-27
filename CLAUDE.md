@@ -205,7 +205,17 @@ Each document consists of a `.md` file paired with a `.meta.json` sidecar file:
 4. ✅ **Step 4**: Audit logging
 5. ✅ **Step 5**: Guardrails (Injection / Leakage) - detect & mitigate
 6. ✅ **Step 6**: Evals integration
-7. ⬜ **Step 7**: Remaining failures (Hallucination / Cost / Rate Limiting)
+
+## Future Extensibility
+
+### Hallucination Detection
+
+The current Groundedness evaluation (`groundedness_evals.py`) provides a foundation for hallucination detection through claim-context alignment analysis. Future enhancements may include:
+
+- **Real-time hallucination detection**: Integrate claim support rate checking into the generation pipeline
+- **Confidence scoring**: Assign confidence levels to generated claims based on context overlap
+- **Unsupported claim handling**: Automatic flagging or removal of claims with low support rates
+- **LLM-based verification**: Optional LLM judge for complex inference validation (with cost/latency trade-offs)
 
 ## Coding Conventions
 
