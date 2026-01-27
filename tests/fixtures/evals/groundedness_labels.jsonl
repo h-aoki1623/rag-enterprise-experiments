@@ -1,0 +1,10 @@
+{"case_id": "q001", "expected_claims": ["vacation", "days"], "expected_citations": ["internal-001"], "forbidden_claims": ["unlimited vacation"]}
+{"case_id": "q002", "expected_claims": ["request", "time off"], "expected_citations": ["internal-001"], "forbidden_claims": []}
+{"case_id": "q003", "expected_claims": ["health", "insurance"], "expected_citations": ["internal-002"], "forbidden_claims": []}
+{"case_id": "q004", "expected_claims": ["401k", "retirement"], "expected_citations": ["internal-003"], "forbidden_claims": []}
+{"case_id": "q005", "expected_claims": ["remote", "work"], "expected_citations": ["internal-004"], "forbidden_claims": []}
+{"case_id": "q006", "expected_claims": ["parental", "leave"], "expected_citations": ["internal-005"], "forbidden_claims": []}
+{"case_id": "q007", "expected_claims": ["security", "VPN"], "expected_citations": ["internal-006"], "forbidden_claims": []}
+{"case_id": "q008", "expected_claims": ["onboarding"], "expected_citations": ["internal-007"], "forbidden_claims": []}
+{"case_id": "q009", "expected_claims": ["expense", "reimbursement"], "expected_citations": ["internal-008"], "forbidden_claims": []}
+{"case_id": "q010", "expected_claims": ["confidential"], "expected_citations": ["confidential-001"], "forbidden_claims": []}

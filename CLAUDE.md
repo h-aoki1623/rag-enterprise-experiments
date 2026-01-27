@@ -21,7 +21,7 @@ An enterprise-grade RAG (Retrieval-Augmented Generation) system implementation p
 src/
 ├── app.py              # CLI entry point
 └── rag/
-    ├── config.py       # Settings class (includes AuditSettings)
+    ├── config.py       # Settings class (includes AuditSettings, GuardrailSettings, EvalSettings)
     ├── models.py       # Pydantic models
     ├── ingest.py       # Document ingestion pipeline
     ├── retrieve.py     # Vector search with RBAC
@@ -29,7 +29,17 @@ src/
     ├── rbac.py         # Role-Based Access Control with mandatory audit
     ├── audit.py        # Enterprise audit logging (hash chain, tamper detection)
     ├── guardrails.py   # Input/Output guardrails (injection/leakage detection)
-    └── prompts.py      # System/user prompt templates
+    ├── prompts.py      # System/user prompt templates
+    └── evals/          # Evaluation framework
+        ├── models.py           # Eval data models (cases, results, traces)
+        ├── metrics.py          # Metric calculations (MRR, NDCG, AUC, etc.)
+        ├── retrieval_evals.py  # A. Retrieval evaluation
+        ├── context_quality_evals.py  # B. Context quality evaluation
+        ├── groundedness_evals.py     # C. Groundedness evaluation
+        ├── safety_evals.py           # E. Safety evaluation
+        ├── pipeline_evals.py         # F. Pipeline evaluation
+        ├── runner.py           # EvalRunner orchestrator
+        └── report.py           # Report generation (JSON/Markdown)
 
 data/docs/              # Source documents (.md + .meta.json)
 ├── public/
@@ -38,7 +48,10 @@ data/docs/              # Source documents (.md + .meta.json)
 
 indexes/                # FAISS index + docstore.json
 logs/                   # Audit logs (hash-chained JSON)
+reports/evals/          # Generated evaluation reports
+traces/                 # Execution traces for debugging
 tests/                  # pytest tests
+tests/fixtures/evals/   # Evaluation fixtures (cases.jsonl, *_labels.jsonl)
 ```
 
 ## Allowed Commands
@@ -154,6 +167,12 @@ python -m src.app ask "question" -H      # Hierarchical retrieval
 # Show system info
 python -m src.app info
 
+# Run evaluations
+python -m src.app eval                           # Full suite
+python -m src.app eval --suite smoke             # Smoke test (fast)
+python -m src.app eval --perspective retrieval   # Specific perspective
+python -m src.app eval --save-trace -v           # With traces and verbose
+
 # Run tests
 make test
 
@@ -185,7 +204,7 @@ Each document consists of a `.md` file paired with a `.meta.json` sidecar file:
 3. ✅ **Step 3**: RBAC filter (role-based)
 4. ✅ **Step 4**: Audit logging
 5. ✅ **Step 5**: Guardrails (Injection / Leakage) - detect & mitigate
-6. ⬜ **Step 6**: Evals integration
+6. ✅ **Step 6**: Evals integration
 7. ⬜ **Step 7**: Remaining failures (Hallucination / Cost / Rate Limiting)
 
 ## Coding Conventions
@@ -224,6 +243,45 @@ Two-lane architecture:
    - Actions: ALLOW → WARN → BLOCK
 
 Key design principle: `check()` for inspection, `redact()` for transformation (separation of concerns).
+
+## Evaluation Framework
+
+Perspective-based evaluation for clear diagnosis (e.g., "retrieval good, groundedness bad" → focus on prompts).
+
+### Perspectives
+
+| Perspective | Description | Key Metrics |
+|-------------|-------------|-------------|
+| A. Retrieval | Document/chunk retrieval quality | NDCG@k, MRR, Recall@k, Precision@k |
+| B. Context Quality | Retrieved context usefulness | Redundancy ratio, fact dispersion |
+| C. Groundedness | Answer-context alignment | Claim support rate, citation validity |
+| E. Safety | Guardrail effectiveness | AUC, TPR@FPR=1% |
+| F. Pipeline | End-to-end integration | Outcome validation, latency |
+
+### EvalSettings (config.py)
+
+Configurable thresholds via environment variables:
+
+```bash
+# Algorithm parameters
+EVALS__CLAIM_OVERLAP_THRESHOLD=0.3       # Claim-context matching
+EVALS__INFERENCE_THRESHOLD_RATIO=0.7     # Relaxation for inference claims
+
+# Success criteria
+EVALS__MIN_CLAIM_SUPPORT_RATE=0.85       # Minimum claim support rate
+EVALS__MIN_CITATION_VALIDITY_FORM=0.95   # Minimum citation validity
+
+# Context quality
+EVALS__REDUNDANCY_THRESHOLD=0.5          # N-gram overlap for redundancy
+EVALS__TFIDF_SIMILARITY_THRESHOLD=0.8    # TF-IDF cosine similarity
+```
+
+### Design Principles
+
+- **Heuristic-based**: No LLM calls for cost-free CI runs
+- **Query-centric fixtures**: Shared `case_id` across perspectives
+- **Trace storage**: Execution traces for debugging failed cases
+- **Action-based detection**: Safety evals use `action != ALLOW` (consistent with guardrails)
 
 ## Notes
 

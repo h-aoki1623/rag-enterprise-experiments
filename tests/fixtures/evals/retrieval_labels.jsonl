@@ -1,0 +1,10 @@
+{"case_id": "q001", "relevant_docs": ["internal-001"], "relevance_grades": {"internal-001": 3}, "relevant_chunks": ["internal-001-child-002-001"], "chunk_relevance_grades": {"internal-001-child-002-001": 3}}
+{"case_id": "q002", "relevant_docs": ["internal-001"], "relevance_grades": {"internal-001": 2}, "relevant_chunks": ["internal-001-child-002-000", "internal-001-parent-002"], "chunk_relevance_grades": {"internal-001-child-002-000": 2, "internal-001-parent-002": 2}}
+{"case_id": "q003", "relevant_docs": ["internal-001"], "relevance_grades": {"internal-001": 3}, "relevant_chunks": ["internal-001-child-003-001"], "chunk_relevance_grades": {"internal-001-child-003-001": 3}}
+{"case_id": "q004", "relevant_docs": ["internal-001"], "relevance_grades": {"internal-001": 3}, "relevant_chunks": ["internal-001-child-003-002"], "chunk_relevance_grades": {"internal-001-child-003-002": 3}}
+{"case_id": "q005", "relevant_docs": ["internal-001"], "relevance_grades": {"internal-001": 3}, "relevant_chunks": ["internal-001-child-001-002"], "chunk_relevance_grades": {"internal-001-child-001-002": 3}}
+{"case_id": "q006", "relevant_docs": [], "relevance_grades": {}, "relevant_chunks": [], "chunk_relevance_grades": {}}
+{"case_id": "q007", "relevant_docs": ["internal-002"], "relevance_grades": {"internal-002": 3}, "relevant_chunks": ["internal-002-child-004-001", "internal-002-child-001-001", "internal-002-child-001-002"], "chunk_relevance_grades": {"internal-002-child-004-001": 3, "internal-002-child-001-001": 3, "internal-002-child-001-002": 2}}
+{"case_id": "q008", "relevant_docs": ["internal-001"], "relevance_grades": {"internal-001": 2}, "relevant_chunks": ["internal-001-child-000-000"], "chunk_relevance_grades": {"internal-001-child-000-000": 2}}
+{"case_id": "q009", "relevant_docs": [], "relevance_grades": {}, "relevant_chunks": [], "chunk_relevance_grades": {}}
+{"case_id": "q010", "relevant_docs": ["internal-002"], "relevance_grades": {"internal-002": 3}, "relevant_chunks": ["internal-002-child-002-001", "internal-002-child-002-000"], "chunk_relevance_grades": {"internal-002-child-002-001": 3, "internal-002-child-002-000": 2}}

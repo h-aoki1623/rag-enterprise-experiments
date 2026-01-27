@@ -1,0 +1,10 @@
+{"case_id": "q001", "gold_facts": [{"fact": "15 days vacation", "aliases": ["fifteen days", "15 PTO days"]}], "expected_chunks": []}
+{"case_id": "q002", "gold_facts": [{"fact": "submit request", "aliases": ["request form", "time off request"]}], "expected_chunks": []}
+{"case_id": "q003", "gold_facts": [{"fact": "health insurance", "aliases": ["medical coverage", "health plan"]}], "expected_chunks": []}
+{"case_id": "q004", "gold_facts": [{"fact": "401k matching", "aliases": ["retirement matching", "employer match"]}], "expected_chunks": []}
+{"case_id": "q005", "gold_facts": [{"fact": "remote work", "aliases": ["work from home", "WFH"]}], "expected_chunks": []}
+{"case_id": "q006", "gold_facts": [{"fact": "parental leave", "aliases": ["maternity leave", "paternity leave"]}], "expected_chunks": []}
+{"case_id": "q007", "gold_facts": [{"fact": "VPN required", "aliases": ["use VPN", "connect via VPN"]}], "expected_chunks": []}
+{"case_id": "q008", "gold_facts": [{"fact": "onboarding process", "aliases": ["new employee orientation"]}], "expected_chunks": []}
+{"case_id": "q009", "gold_facts": [{"fact": "expense report", "aliases": ["reimbursement form"]}], "expected_chunks": []}
+{"case_id": "q010", "gold_facts": [{"fact": "executive access", "aliases": ["confidential clearance"]}], "expected_chunks": []}
