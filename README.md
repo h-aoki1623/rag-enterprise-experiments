@@ -538,11 +538,16 @@ Example usage:
 EVALS__MIN_CLAIM_SUPPORT_RATE=0.90 python -m src.app eval --perspective groundedness
 ```
 
-### Planned
+## Future Extensibility
 
-- **Hallucination** detection and mitigation
-- **Cost explosion** prevention
-- **Rate limiting** controls
+### Hallucination Detection
+
+The current Groundedness evaluation (`groundedness_evals.py`) provides a foundation for hallucination detection through claim-context alignment analysis. Future enhancements may include:
+
+- **Real-time hallucination detection**: Integrate claim support rate checking into the generation pipeline
+- **Confidence scoring**: Assign confidence levels to generated claims based on context overlap
+- **Unsupported claim handling**: Automatic flagging or removal of claims with low support rates
+- **LLM-based verification**: Optional LLM judge for complex inference validation (with cost/latency trade-offs)
 
 ## License
 
