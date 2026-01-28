@@ -60,7 +60,7 @@ python -m src.app ingest
 ```
 
 This will:
-- Load all documents from `data/docs/`
+- Load all documents from `data/sample-docs/`
 - Split them into chunks
 - Generate embeddings using local model
 - Build FAISS index
@@ -245,7 +245,7 @@ rag-enterprise-experiments/
 Documents are stored as Markdown files with JSON metadata sidecars:
 
 ```
-data/docs/public/
+data/sample-docs/public/
 ├── company-overview.md
 └── company-overview.meta.json
 ```

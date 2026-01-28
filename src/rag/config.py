@@ -268,7 +268,7 @@ class Settings(BaseSettings):
 
     # Paths
     docs_dir: Path = Field(
-        default=PROJECT_ROOT / "data" / "docs",
+        default=PROJECT_ROOT / "data" / "sample-docs",
         description="Directory containing source documents",
     )
     index_dir: Path = Field(

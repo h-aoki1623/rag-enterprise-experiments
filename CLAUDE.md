@@ -41,7 +41,7 @@ src/
         ├── runner.py           # EvalRunner orchestrator
         └── report.py           # Report generation (JSON/Markdown)
 
-data/docs/              # Source documents (.md + .meta.json)
+data/sample-docs/       # Sample documents (.md + .meta.json)
 ├── public/
 ├── internal/
 └── confidential/
@@ -85,12 +85,14 @@ tests/fixtures/evals/   # Evaluation fixtures (cases.jsonl, *_labels.jsonl)
 
 Claude MUST use the following branch prefixes and meanings:
 
-- **feature/**  
-  General feature development.  
+- **feature/**
+  General feature development.
   Includes:
   - Application logic
   - Test implementation
   - Infrastructure or CDK-related implementation
+  - Refactoring code
+  - Directory structure changes
 
 - **fix/**  
   Bug fixes intended to be released as hotfixes.

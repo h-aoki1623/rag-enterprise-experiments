@@ -400,7 +400,7 @@ def main() -> int:
     ingest_parser.add_argument(
         "--docs-dir",
         type=str,
-        help="Directory containing documents (default: data/docs)",
+        help="Directory containing documents (default: data/sample-docs)",
     )
     ingest_parser.add_argument(
         "--flat",
