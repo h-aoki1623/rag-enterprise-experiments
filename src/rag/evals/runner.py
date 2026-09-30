@@ -141,7 +141,6 @@ class EvalRunner:
             case = GroundednessEvalCase(
                 case_id=raw["case_id"],
                 expected_claims=raw.get("expected_claims", []),
-                expected_citations=raw.get("expected_citations", []),
                 forbidden_claims=raw.get("forbidden_claims", []),
             )
             labels[case.case_id] = case

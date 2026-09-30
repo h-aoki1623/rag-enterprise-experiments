@@ -14,7 +14,6 @@ from src.rag.evals.metrics import (
     calculate_percentiles,
     citation_validity_content,
     citation_validity_form,
-    claim_context_overlap,
     extract_claims,
     extract_numbers,
     f1_at_k,
@@ -218,20 +217,6 @@ class TestGroundednessMetrics:
         text = "The vacation policy allows 15 days. Employees may request additional time."
         claims = extract_claims(text)
         assert len(claims) >= 1
-
-    def test_claim_context_overlap_supported(self):
-        """Supported claims should have high overlap."""
-        claim = "employees get 15 days of vacation"
-        context = "employees get 15 days of vacation time per year"
-        # Lower threshold since the overlap depends on word matching
-        assert claim_context_overlap(claim, context, threshold=0.10) is True
-
-    def test_claim_context_overlap_unsupported(self):
-        """Unsupported claims should have low overlap."""
-        claim = "Employees get 30 days vacation"
-        context = "Our vacation policy provides 15 days of vacation time."
-        # Should not find support for "30 days"
-        assert claim_context_overlap(claim, context, threshold=0.5) is False
 
     def test_extract_numbers(self):
         """Number extraction should find various formats."""

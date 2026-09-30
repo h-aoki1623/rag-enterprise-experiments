@@ -40,20 +40,6 @@ class GuardrailSettings(BaseModel):
         description="Maximum query length before anomaly score increases",
     )
 
-    # Output guardrail settings
-    ngram_size: int = Field(
-        default=5,
-        description="N-gram size for verbatim detection",
-    )
-    max_verbatim_ratio: float = Field(
-        default=0.4,
-        description="Maximum allowed verbatim overlap ratio",
-    )
-    max_lcs_ratio: float = Field(
-        default=0.5,
-        description="Maximum allowed longest common subsequence ratio",
-    )
-
     # Input guardrail thresholds (fixed - not classification-based)
     # Note: Classification-based thresholds were removed as a security improvement.
     # If a user account is compromised, varying thresholds by role or classification
@@ -75,38 +61,6 @@ class GuardrailSettings(BaseModel):
     injection_block_threshold: float = Field(
         default=0.50,
         description="Threshold at or above which queries are blocked",
-    )
-
-    # Output guardrail thresholds (classification-based)
-    # Each classification has its own set of action thresholds.
-    # Structure: {"public": {"allow": 0.4, "warn": 0.64, "block": 0.8}, ...}
-    #
-    # Action determination based on score:
-    #   score < allow_threshold  → ALLOW
-    #   score < warn_threshold   → WARN
-    #   score < block_threshold  → REDACT
-    #   score >= block_threshold → BLOCK
-    leakage_thresholds: dict[str, dict[str, float]] = Field(
-        default={
-            "public": {"allow": 0.40, "warn": 0.64, "block": 0.80},
-            "internal": {"allow": 0.30, "warn": 0.48, "block": 0.60},
-            "confidential": {"allow": 0.20, "warn": 0.32, "block": 0.40},
-        },
-        description="Action thresholds for leakage detection by classification",
-    )
-
-    # Default thresholds (fallback when classification not found)
-    default_leakage_allow_threshold: float = Field(
-        default=0.30,
-        description="Default allow threshold if classification not found",
-    )
-    default_leakage_warn_threshold: float = Field(
-        default=0.48,
-        description="Default warn threshold if classification not found",
-    )
-    default_leakage_block_threshold: float = Field(
-        default=0.60,
-        description="Default block threshold if classification not found",
     )
 
     # Debug/logging settings
@@ -184,6 +138,28 @@ class EvalSettings(BaseModel):
         description="Ratio applied to claim_overlap_threshold for inference claims (more lenient)",
     )
 
+    # Hybrid lexical matching settings (3-stage claim verification)
+    min_key_terms: int = Field(
+        default=3,
+        description="Minimum key terms required to confirm support at stage 1",
+    )
+    key_term_threshold: float = Field(
+        default=0.5,
+        description="Minimum key term match ratio (weighted) for support",
+    )
+    number_weight: float = Field(
+        default=2.0,
+        description="Weight multiplier for numbers in key term matching",
+    )
+    jaccard_threshold: float = Field(
+        default=0.25,
+        description="Minimum Jaccard similarity for sentence-level matching",
+    )
+    ngram_fallback_threshold: float = Field(
+        default=0.15,
+        description="N-gram overlap threshold for fallback matching (lowered from 0.3)",
+    )
+
     # Groundedness evaluation settings - success criteria thresholds
     min_claim_support_rate: float = Field(
         default=0.85,
@@ -195,13 +171,9 @@ class EvalSettings(BaseModel):
     )
 
     # Context quality evaluation settings
-    redundancy_threshold: float = Field(
-        default=0.5,
-        description="N-gram overlap threshold for detecting redundant chunks",
-    )
     tfidf_similarity_threshold: float = Field(
         default=0.8,
-        description="TF-IDF cosine similarity threshold for paraphrase redundancy",
+        description="TF-IDF cosine similarity threshold for redundancy detection",
     )
 
     # Retrieval evaluation settings
@@ -244,16 +216,16 @@ class Settings(BaseSettings):
         description="Parent chunk size in characters (~1000 tokens)",
     )
     child_chunk_size: int = Field(
-        default=500,
-        description="Child chunk size in characters (~165 tokens)",
+        default=800,
+        description="Child chunk size in characters (~265 tokens)",
     )
     child_chunk_overlap: int = Field(
-        default=50,
+        default=100,
         description="Overlap between child chunks in characters",
     )
     parent_preview_size: int = Field(
-        default=500,
-        description="Initial preview size for parent context (chars)",
+        default=1500,
+        description="Initial preview size for parent context (chars, 50% of parent)",
     )
 
     # Retrieval settings

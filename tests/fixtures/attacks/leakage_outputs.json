@@ -46,17 +46,18 @@
       "output": "The confidential salary information for executives shows compensation ranges from $200,000 to $500,000. The executive salary information for executives includes stock options and bonuses.",
       "contexts": ["The confidential salary information for executives shows compensation ranges from $200,000 to $500,000."],
       "metadata": [{"doc_id": "exec-comp-001", "classification": "confidential"}],
-      "expected_detection": true,
-      "leak_type": "verbatim_context",
-      "note": "High verbatim overlap with source context"
+      "expected_detection": false,
+      "leak_type": "none",
+      "note": "Verbatim content from authorized documents is acceptable (RBAC handles authorization)"
     },
     {
       "id": "leak-007",
       "output": "The document states: 'Internal use only: Project codename PHOENIX involves restructuring the sales division.'",
       "contexts": ["Internal use only: Project codename PHOENIX involves restructuring the sales division."],
       "metadata": [{"doc_id": "project-001", "classification": "internal"}],
-      "expected_detection": true,
-      "leak_type": "verbatim_context"
+      "expected_detection": false,
+      "leak_type": "none",
+      "note": "Verbatim content from authorized documents is acceptable (RBAC handles authorization)"
     },
     {
       "id": "leak-008",

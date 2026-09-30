@@ -267,7 +267,6 @@ class GuardrailAuditEvent(AuditEvent):
     # Detection details (masked)
     matched_pattern_count: int = 0
     pii_detected_count: int = 0
-    verbatim_ratio: Optional[float] = None
 
 
 # =============================================================================

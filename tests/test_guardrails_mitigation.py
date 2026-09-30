@@ -96,9 +96,9 @@ class TestOutputGuardrailActions:
     def test_detects_high_pii_exposure_and_sets_sanitize_needed(self, guardrail):
         """Detect multiple PII exposures and set sanitize_needed flag.
 
-        In the two-lane design:
+        Sanitize-only design:
         - Sanitize lane detects PII and sets sanitize_needed = True
-        - Content lane determines action (ALLOW/WARN/BLOCK based on verbatim overlap)
+        - Classification-aware blocking for internal/confidential documents
         - Caller should call redact() when sanitize_needed is True
         """
         output = "Contact john@company.com or call 090-1234-5678. SSN: 123-45-6789"
@@ -143,9 +143,8 @@ class TestOutputGuardrailActions:
     def test_allows_appropriate_summarization(self, guardrail):
         """Allow appropriate summarization of public content.
 
-        Note: Two-lane design means content lane (paraphrasing check) is separate
-        from sanitize lane (metadata/PII check). This test verifies content lane
-        allows paraphrasing. Metadata without sensitive info doesn't trigger sanitize.
+        Sanitize-only design allows verbatim content since RBAC handles authorization.
+        This test verifies that content without PII/secrets/metadata is allowed.
         """
         context = "The company was founded in 2010 and has grown to 500 employees."
         output = "According to the documents, the company was established " \
@@ -156,9 +155,7 @@ class TestOutputGuardrailActions:
 
         result = guardrail.check(output, [context], metadata, Classification.PUBLIC)
 
-        # Content lane: Should allow since it's paraphrasing, not verbatim
-        # Sanitize lane: metadata_leak_count may be 1 (doc_id detected in metadata pattern)
-        # but the overall action depends on whether doc_id appears in output
+        # Should allow since no PII/secrets/metadata detected in output
         # Since "about-company-history" doesn't appear in output, sanitize_needed = False
         assert result.action in (GuardrailAction.ALLOW, GuardrailAction.WARN)
 
@@ -176,9 +173,11 @@ class TestOutputGuardrailActions:
             Classification.PUBLIC,
         )
 
-        # Same output, but internal should be stricter
-        # Public threshold is 0.8, internal is 0.6
-        assert result_internal.threat_score == result_public.threat_score
+        # Detection-only design: same detection regardless of classification
+        # (RBAC handles authorization, OutputGuardrail only detects for redaction)
+        assert result_internal.details.get("sanitize_needed") == result_public.details.get(
+            "sanitize_needed"
+        )
 
 
 class TestGuardrailDisabling:
@@ -232,8 +231,12 @@ class TestThreatTypeIdentification:
                 "jailbreak_intent",
             ]
 
-    def test_identifies_leakage_threat_type(self, output_guardrail):
-        """Identify leakage threat types correctly."""
+    def test_identifies_leakage_detection(self, output_guardrail):
+        """Verify leakage detection sets sanitize_needed correctly.
+
+        OutputGuardrail uses detection-only design (no threat_type).
+        Detection is indicated by sanitize_needed flag and breakdown counts.
+        """
         # PII leakage
         result = output_guardrail.check(
             "Contact john@company.com",
@@ -241,9 +244,6 @@ class TestThreatTypeIdentification:
             [],
             Classification.INTERNAL,
         )
-        if result.threat_type:
-            assert result.threat_type in [
-                "verbatim_context",
-                "metadata_exposure",
-                "pii_in_output",
-            ]
+        # Should detect PII and set sanitize_needed
+        assert result.details.get("sanitize_needed") is True
+        assert result.score_breakdown.get("pii_detected_count", 0) > 0

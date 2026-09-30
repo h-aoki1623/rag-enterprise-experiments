@@ -235,8 +235,8 @@ class TestLeakageDetectionAccuracy:
                 expected_detections += 1
                 result = guardrail.check(output, contexts, metadata, classification)
 
-                # Detection threshold: score > 0.2
-                if result.threat_score > 0.2:
+                # Detection: sanitize_needed flag indicates something was detected
+                if result.details.get("sanitize_needed", False):
                     detected += 1
 
         detection_rate = detected / expected_detections if expected_detections > 0 else 0
@@ -310,7 +310,8 @@ class TestLeakageDetectionAccuracy:
                 classification = Classification(classification_str)
 
                 result = guardrail.check(output, contexts, metadata, classification)
-                if result.threat_score > 0.2:
+                # Detection: sanitize_needed flag indicates something was detected
+                if result.details.get("sanitize_needed", False):
                     type_stats[leak_type]["detected"] += 1
 
         print("\nDetection by leakage type:")

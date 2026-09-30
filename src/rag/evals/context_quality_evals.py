@@ -20,7 +20,6 @@ from src.rag.config import EvalSettings, settings
 from src.rag.evals.metrics import (
     calculate_percentiles,
     fact_dispersion,
-    redundancy_ratio,
     redundancy_ratio_tfidf,
     unique_token_ratio,
 )
@@ -55,8 +54,6 @@ class ContextQualityEvaluator:
     def __init__(
         self,
         default_user_context: Optional[UserContext] = None,
-        use_tfidf: bool = True,
-        ngram_size: int = 5,
         k: int = 5,
         eval_settings: Optional[EvalSettings] = None,
     ):
@@ -64,21 +61,16 @@ class ContextQualityEvaluator:
 
         Args:
             default_user_context: Default user context for retrieval
-            use_tfidf: Whether to use TF-IDF for redundancy detection
-            ngram_size: N-gram size for overlap detection
             k: Number of chunks to retrieve
             eval_settings: Evaluation settings (uses global settings if None)
         """
         self.default_user_context = default_user_context or UserContext(
             user_roles=["employee", "executive"]
         )
-        self.use_tfidf = use_tfidf
-        self.ngram_size = ngram_size
         self.k = k
 
         # Load settings from config
         self.eval_settings = eval_settings or settings.evals
-        self.redundancy_threshold = self.eval_settings.redundancy_threshold
         self.tfidf_similarity_threshold = self.eval_settings.tfidf_similarity_threshold
 
     def evaluate_case(
@@ -138,18 +130,10 @@ class ContextQualityEvaluator:
 
             metrics = {}
 
-            # Redundancy metrics
-            if self.use_tfidf:
-                metrics["redundancy_ratio_tfidf"] = redundancy_ratio_tfidf(
-                    chunk_texts, threshold=self.tfidf_similarity_threshold
-                )
-            metrics["redundancy_ratio_ngram"] = redundancy_ratio(
-                chunk_texts, threshold=self.redundancy_threshold, n=self.ngram_size
-            )
-            # Use the higher of the two as the primary redundancy metric
-            metrics["redundancy_ratio"] = max(
-                metrics.get("redundancy_ratio_tfidf", 0),
-                metrics["redundancy_ratio_ngram"],
+            # Redundancy ratio using TF-IDF cosine similarity
+            # TF-IDF detects both lexical (verbatim) and semantic (paraphrased) duplicates
+            metrics["redundancy_ratio"] = redundancy_ratio_tfidf(
+                chunk_texts, threshold=self.tfidf_similarity_threshold
             )
 
             # Unique token ratio
@@ -158,7 +142,6 @@ class ContextQualityEvaluator:
             # Fact dispersion for each gold fact
             total_dispersion = 0
             facts_found = 0
-            expected_chunks_found = 0
 
             for gold_fact in context_case.gold_facts:
                 dispersion = fact_dispersion(
@@ -260,8 +243,6 @@ class ContextQualityEvaluator:
         aggregate = {}
         metric_names = [
             "redundancy_ratio",
-            "redundancy_ratio_tfidf",
-            "redundancy_ratio_ngram",
             "unique_token_ratio",
             "avg_fact_dispersion",
             "facts_found_ratio",
@@ -319,8 +300,7 @@ class ContextQualityEvaluator:
                 duration_seconds=duration,
                 config={
                     "k": self.k,
-                    "use_tfidf": self.use_tfidf,
-                    "ngram_size": self.ngram_size,
+                    "tfidf_similarity_threshold": self.tfidf_similarity_threshold,
                 },
             ),
             traces,

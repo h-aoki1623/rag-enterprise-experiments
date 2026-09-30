@@ -183,6 +183,8 @@ def redundancy_ratio(chunks: list[str], threshold: float = 0.3, n: int = 5) -> f
 def redundancy_ratio_tfidf(chunks: list[str], threshold: float = 0.7) -> float:
     """Calculate redundancy ratio using TF-IDF cosine similarity.
 
+    Detects both lexical (verbatim) and semantic (paraphrased) duplicates.
+
     Args:
         chunks: List of chunk texts
         threshold: Cosine similarity threshold to consider as duplicate
@@ -193,41 +195,41 @@ def redundancy_ratio_tfidf(chunks: list[str], threshold: float = 0.7) -> float:
     if len(chunks) < 2:
         return 0.0
 
-    try:
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.metrics.pairwise import cosine_similarity
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
 
-        vectorizer = TfidfVectorizer()
-        tfidf_matrix = vectorizer.fit_transform(chunks)
-        sim_matrix = cosine_similarity(tfidf_matrix)
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(chunks)
+    sim_matrix = cosine_similarity(tfidf_matrix)
 
-        redundant_pairs = 0
-        total_pairs = 0
+    redundant_pairs = 0
+    total_pairs = 0
 
-        for i in range(len(chunks)):
-            for j in range(i + 1, len(chunks)):
-                total_pairs += 1
-                if sim_matrix[i, j] > threshold:
-                    redundant_pairs += 1
+    for i in range(len(chunks)):
+        for j in range(i + 1, len(chunks)):
+            total_pairs += 1
+            if sim_matrix[i, j] > threshold:
+                redundant_pairs += 1
 
-        return redundant_pairs / total_pairs if total_pairs > 0 else 0.0
-
-    except ImportError:
-        # Fallback to n-gram if sklearn not available
-        return redundancy_ratio(chunks, threshold=0.3)
+    return redundant_pairs / total_pairs if total_pairs > 0 else 0.0
 
 
 def fact_dispersion(
     chunks: list[str],
     gold_fact: str,
     aliases: Optional[list[str]] = None,
+    fuzzy_threshold: float = 0.7,
 ) -> int:
-    """Count how many chunks contain a gold fact (or its aliases).
+    """Count how many chunks contain a gold fact using fuzzy matching.
+
+    First tries exact substring match (original behavior).
+    Falls back to word overlap matching for paraphrased facts.
 
     Args:
         chunks: List of chunk texts
         gold_fact: The canonical fact text
         aliases: Alternative expressions of the same fact
+        fuzzy_threshold: Minimum word overlap ratio for fuzzy match
 
     Returns:
         Number of chunks containing the fact
@@ -236,11 +238,24 @@ def fact_dispersion(
     if aliases:
         all_variants.extend(a.lower() for a in aliases)
 
+    # Extract content words from fact for fuzzy matching
+    fact_words = set(gold_fact.lower().split()) - STOPWORDS
+
     count = 0
     for chunk in chunks:
         chunk_lower = chunk.lower()
+
+        # Try exact match first
         if any(variant in chunk_lower for variant in all_variants):
             count += 1
+            continue
+
+        # Fuzzy match: check word overlap
+        if fact_words:
+            chunk_words = set(chunk_lower.split())
+            overlap = len(fact_words & chunk_words) / len(fact_words)
+            if overlap >= fuzzy_threshold:
+                count += 1
 
     return count
 
@@ -267,6 +282,78 @@ def unique_token_ratio(chunks: list[str]) -> float:
 # Groundedness Metrics
 # =============================================================================
 
+# Common English stopwords for filtering
+STOPWORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "must", "shall", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "it", "its", "this", "that", "these",
+    "those", "and", "or", "but", "if", "then", "than", "so", "as", "no",
+    "not", "only", "own", "same", "too", "very", "can", "just", "into",
+    "out", "up", "down", "about", "over", "under", "again", "further",
+    "once", "here", "there", "when", "where", "why", "how", "all", "each",
+    "few", "more", "most", "other", "some", "such", "any", "both", "our",
+    "your", "their", "his", "her", "my", "i", "you", "he", "she", "we",
+    "they", "who", "which", "what", "whom", "whose", "also", "however",
+})
+
+
+def normalize_number(num_str: str) -> str:
+    """Normalize a number string for comparison.
+
+    Args:
+        num_str: Number string (e.g., "1,000", "$500", "10%")
+
+    Returns:
+        Normalized number string
+    """
+    # Remove currency symbols and commas
+    normalized = re.sub(r"[$,]", "", num_str)
+    # Standardize whitespace
+    normalized = re.sub(r"\s+", " ", normalized).strip().lower()
+    return normalized
+
+
+def extract_key_terms(text: str, number_weight: float = 2.0) -> list[tuple[str, float]]:
+    """Extract key terms from text with weights.
+
+    Numbers get higher weight as they are strong anchors for claim verification.
+
+    Args:
+        text: Input text
+        number_weight: Weight multiplier for numeric terms
+
+    Returns:
+        List of (normalized_term, weight) tuples
+    """
+    terms = []
+
+    # Extract numbers: 2024, 1.2, 30%, $500, 1,000
+    number_pattern = r"\b\d+(?:[.,]\d+)*%?\b|\$[\d,]+(?:\.\d+)?"
+    numbers = re.findall(number_pattern, text)
+    for num in numbers:
+        normalized = normalize_number(num)
+        if normalized and len(normalized) > 0:
+            terms.append((normalized, number_weight))
+
+    # Extract proper nouns (capitalized words, excluding sentence starts)
+    # This is a heuristic - proper nouns tend to be capitalized
+    proper_noun_pattern = r"(?<![.!?]\s)\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b"
+    proper_nouns = re.findall(proper_noun_pattern, text)
+    for noun in proper_nouns:
+        normalized = noun.lower().strip()
+        if normalized and len(normalized) > 2 and normalized not in STOPWORDS:
+            terms.append((normalized, 1.0))
+
+    # Extract technical terms (all caps, acronyms)
+    tech_pattern = r"\b[A-Z]{2,}(?:\d+)?\b"
+    tech_terms = re.findall(tech_pattern, text)
+    for term in tech_terms:
+        normalized = term.lower()
+        if normalized and len(normalized) > 1:
+            terms.append((normalized, 1.0))
+
+    return terms
 
 def extract_claims(answer: str) -> list[tuple[str, str]]:
     """Extract claims from an answer with their type classification.
@@ -313,23 +400,6 @@ def extract_claims(answer: str) -> list[tuple[str, str]]:
 
     return claims
 
-
-def claim_context_overlap(claim: str, context: str, threshold: float = 0.2) -> bool:
-    """Check if a claim is supported by context using n-gram overlap.
-
-    Args:
-        claim: The claim text
-        context: The context text
-        threshold: Minimum overlap to consider supported
-
-    Returns:
-        True if claim appears supported by context
-    """
-    # Use shorter n-grams for claim checking
-    overlap = calc_ngram_overlap(claim, context, n=3)
-    return overlap > threshold
-
-
 def extract_numbers(text: str) -> list[str]:
     """Extract normalized numbers from text.
 
@@ -357,6 +427,118 @@ def extract_numbers(text: str) -> list[str]:
 
     return list(set(numbers))
 
+def split_sentences(text: str) -> list[str]:
+    """Split text into sentences.
+
+    Args:
+        text: Input text
+
+    Returns:
+        List of sentence strings
+    """
+    # Split on sentence-ending punctuation
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    # Filter empty and very short sentences
+    return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
+
+
+def sentence_jaccard(
+    claim: str,
+    context: str,
+    stopwords: frozenset = STOPWORDS,
+) -> float:
+    """Calculate maximum Jaccard similarity between claim and context sentences.
+
+    Compares the claim against each sentence in the context and returns
+    the highest similarity score. A claim is considered grounded if at least
+    one sentence provides strong support.
+
+    Args:
+        claim: The claim text
+        context: The context text
+        stopwords: Set of stopwords to filter
+
+    Returns:
+        Maximum Jaccard similarity among all sentences
+    """
+    ctx_sentences = split_sentences(context)
+    if not ctx_sentences:
+        return 0.0
+
+    # Tokenize claim and remove stopwords
+    claim_words = set(claim.lower().split()) - stopwords
+
+    if not claim_words:
+        return 0.0
+
+    scores = []
+    for ctx_sentence in ctx_sentences:
+        context_words = set(ctx_sentence.lower().split()) - stopwords
+        if context_words:
+            intersection = claim_words & context_words
+            union = claim_words | context_words
+            jaccard = len(intersection) / len(union) if union else 0.0
+            scores.append(jaccard)
+
+    return max(scores, default=0.0)
+
+
+def claim_support(
+    claim: str,
+    context: str,
+    min_key_terms: int = 3,
+    key_term_threshold: float = 0.5,
+    number_weight: float = 2.0,
+    jaccard_threshold: float = 0.25,
+    ngram_threshold: float = 0.15,
+) -> bool:
+    """Check if a claim is supported by context using 3-stage hybrid matching.
+
+    Primary method for claim verification (groundedness, citation validity).
+
+    Stage 1: Key term matching (numbers, proper nouns, technical terms)
+    Stage 2: Sentence-level Jaccard (max similarity among all sentences)
+    Stage 3: N-gram fallback (original method with lower threshold)
+
+    Args:
+        claim: The claim text
+        context: The context text
+        min_key_terms: Minimum key terms to confirm at stage 1
+        key_term_threshold: Minimum weighted match ratio for stage 1
+        number_weight: Weight for numeric terms
+        jaccard_threshold: Minimum Jaccard similarity for stage 2
+        ngram_threshold: Minimum n-gram overlap for stage 3
+
+    Returns:
+        True if claim appears supported by context
+    """
+    # Stage 1: Key term matching
+    claim_terms = extract_key_terms(claim, number_weight)
+
+    if len(claim_terms) >= min_key_terms:
+        context_lower = context.lower()
+
+        total_weight = sum(w for _, w in claim_terms)
+        matched_weight = 0.0
+
+        for term, weight in claim_terms:
+            # Check if term appears in context (word boundary match)
+            if re.search(r"\b" + re.escape(term) + r"\b", context_lower):
+                matched_weight += weight
+
+        if total_weight > 0:
+            match_ratio = matched_weight / total_weight
+            if match_ratio >= key_term_threshold:
+                return True
+
+    # Stage 2: Sentence-level Jaccard
+    jaccard = sentence_jaccard(claim, context)
+    if jaccard >= jaccard_threshold:
+        return True
+
+    # Stage 3: N-gram fallback (original method with lowered threshold)
+    overlap = calc_ngram_overlap(claim, context, n=3)
+    return overlap > ngram_threshold
 
 def numeric_fabrication_count(answer: str, context: str) -> int:
     """Count numbers in answer that don't appear in context.
@@ -437,7 +619,7 @@ def citation_validity_content(
         chunk_text = chunks.get(chunk_id, text_snippet)
 
         # Check if there's meaningful overlap between citation context and answer
-        if claim_context_overlap(answer, chunk_text, threshold=0.1):
+        if claim_support(answer, chunk_text):
             valid += 1
 
     return valid / len(citations)
