@@ -253,7 +253,6 @@ def _call_llm(
     message = client.messages.create(
         model=settings.anthropic_model,
         max_tokens=max_tokens,
-        temperature=settings.generation_temperature,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )

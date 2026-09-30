@@ -271,10 +271,6 @@ class Settings(BaseSettings):
         default=1024,
         description="Maximum tokens for generation",
     )
-    generation_temperature: float = Field(
-        default=0.0,
-        description="Temperature for generation (0.0 for deterministic)",
-    )
 
     # Audit logging settings (nested)
     audit: AuditSettings = Field(

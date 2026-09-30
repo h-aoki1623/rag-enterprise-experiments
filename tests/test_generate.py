@@ -233,12 +233,24 @@ class TestCallLLM:
 
         with patch("src.rag.generate.settings") as mock_settings:
             mock_settings.anthropic_model = "claude-3-5-sonnet-20241022"
-            mock_settings.generation_temperature = 0.0
 
             text, tokens = _call_llm(mock_client, "test prompt", 1024)
 
         assert '{"answer": "test"' in text
         assert tokens == 42
+
+    def test_call_llm_does_not_pass_temperature(self, guardrail_settings):
+        """_call_llm must not pass sampling params unsupported by the SDK."""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = MagicMock(
+            content=[MagicMock(text="{}")], usage=MagicMock(output_tokens=1)
+        )
+
+        with patch("src.rag.generate.settings") as mock_settings:
+            mock_settings.anthropic_model = "claude-haiku-4-5-20251001"
+            _call_llm(mock_client, "test prompt", 1024)
+
+        assert "temperature" not in mock_client.messages.create.call_args.kwargs
 
 
 class TestGenerate:
@@ -312,7 +324,6 @@ class TestGenerate:
             mock_settings.anthropic_api_key = "test-key"
             mock_settings.anthropic_model = "claude-3-5-sonnet-20241022"
             mock_settings.generation_max_tokens = 1024
-            mock_settings.generation_temperature = 0.0
 
             # Mock retrieve to return our test data (patch in retrieve module)
             with patch("src.rag.retrieve.retrieve", return_value=mock_results):
@@ -354,7 +365,6 @@ class TestGenerate:
             mock_settings.anthropic_api_key = "test-key"
             mock_settings.anthropic_model = "claude-3-5-sonnet-20241022"
             mock_settings.generation_max_tokens = 1024
-            mock_settings.generation_temperature = 0.0
 
             with patch("src.rag.retrieve.retrieve", return_value=mock_results):
                 result = generate("Unknown question", k=1, client=mock_client)
@@ -391,7 +401,6 @@ class TestGenerate:
             mock_settings.anthropic_api_key = "test-key"
             mock_settings.anthropic_model = "claude-3-5-sonnet-20241022"
             mock_settings.generation_max_tokens = 1024
-            mock_settings.generation_temperature = 0.0
 
             with patch("src.rag.retrieve.retrieve", return_value=mock_results):
                 result = generate("Unknown question", k=1, client=mock_client)
@@ -408,7 +417,6 @@ class TestGenerate:
             mock_settings.anthropic_api_key = "test-key"
             mock_settings.anthropic_model = "claude-3-5-sonnet-20241022"
             mock_settings.generation_max_tokens = 1024
-            mock_settings.generation_temperature = 0.0
 
             # Retrieve should NOT be called because input guardrail blocks first
             with patch("src.rag.retrieve.retrieve") as mock_retrieve:
