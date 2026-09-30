@@ -264,7 +264,7 @@ class Settings(BaseSettings):
         description="Anthropic API key",
     )
     anthropic_model: str = Field(
-        default="claude-3-5-haiku-20241022",
+        default="claude-haiku-4-5-20251001",
         description="Anthropic model to use for generation",
     )
     generation_max_tokens: int = Field(
