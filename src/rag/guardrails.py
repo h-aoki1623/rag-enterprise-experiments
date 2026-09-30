@@ -2,18 +2,16 @@
 
 This module provides defensive layers for LLM application inputs and outputs:
 - InputGuardrail: Detects prompt injection attacks before LLM processing
-- OutputGuardrail: Detects data leakage in LLM responses before returning to user
+- OutputGuardrail: Detects PII/secrets/metadata for redaction (defense-in-depth)
 
 Architecture:
     User Input → [InputGuardrail] → LLM → [OutputGuardrail] → Response
                       ↓                         ↓
-                Injection detection        Leakage detection
-                Query sanitization         PII filtering
-                Block/Warn decision        Content filtering
+                Injection detection        Detection for redaction
+                Block/Warn decision        (RBAC handles authorization)
 """
 
 import re
-from collections import Counter
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -449,13 +447,13 @@ class InputGuardrail:
 
         if role_marker_count >= 3:
             # Multiple markers suggest intentional prompt structure manipulation
-            score += 0.7
+            score += 0.9  # Increased for better block rate
         elif role_marker_count == 2:
             # Paired markers (open/close) are suspicious
-            score += 0.5
+            score += 0.8  # Increased for better block rate
         elif role_marker_count == 1:
             # Single marker could be accidental (chat log paste)
-            score += 0.2
+            score += 0.3  # Slightly increased from 0.2
 
         # Check for paired markers (opening + closing) - very suspicious
         paired_marker_patterns = [
@@ -469,7 +467,7 @@ class InputGuardrail:
             if re.search(open_pattern, text, re.IGNORECASE) and re.search(
                 close_pattern, text, re.IGNORECASE
             ):
-                score += 0.3  # Additional boost for paired markers
+                score += 0.4  # Increased from 0.3 for better block rate
                 break
 
         # End of prompt markers - higher score for explicit boundary manipulation
@@ -480,7 +478,7 @@ class InputGuardrail:
         ]
         for pattern in end_patterns:
             if re.search(pattern, text):
-                score += 0.5
+                score += 0.8  # Increased from 0.5 for better block rate
                 break
 
         # New conversation/context markers - check for command-like intent
@@ -679,45 +677,26 @@ class InputGuardrail:
 # =============================================================================
 
 
-class LeakageType(str, Enum):
-    """Types of data leakage detected by OutputGuardrail."""
-
-    VERBATIM_CONTEXT = "verbatim_context"
-    METADATA_EXPOSURE = "metadata_exposure"
-    PII_IN_OUTPUT = "pii_in_output"
-    SECRET_IN_OUTPUT = "secret_in_output"
-
-
 class LeakageScoreBreakdown(BaseModel):
     """Output guardrail score breakdown.
 
-    Two-lane architecture:
-    - Sanitize lane: PII, secrets, metadata (detection triggers redaction)
-    - Content lane: verbatim_ratio, longest_match_ratio (threshold-based WARN/BLOCK)
+    Detection-only architecture for redaction:
+    - RBAC already ensures users only see documents they have access to
+    - Verbatim content from authorized documents is not a security concern
+    - Sanitize lane focuses on PII/Secret/Metadata detection for redaction
 
     Detection components:
-    - verbatim_ratio: N-gram overlap ratio with source context (frequency-aware)
-    - longest_match_ratio: Longest common substring (contiguous match) ratio
     - metadata_leak_count: Number of metadata patterns detected
     - pii_detected_count: Number of PII patterns detected
     - secret_detected_count: Number of secret tokens detected (API keys, JWT, etc.)
     - high_confidence_secret_count: High-confidence secrets (PEM, AWS key, JWT)
     """
 
-    # Content lane scores
-    verbatim_ratio: float = 0.0
-    longest_match_ratio: float = 0.0
-
     # Sanitize lane counts
     metadata_leak_count: int = 0
     pii_detected_count: int = 0
     secret_detected_count: int = 0
-    high_confidence_secret_count: int = 0  # PEM, AWS key, JWT - always block
-
-    @property
-    def content_score(self) -> float:
-        """Content lane score (verbatim/substring overlap)."""
-        return max(self.verbatim_ratio, self.longest_match_ratio)
+    high_confidence_secret_count: int = 0
 
     @property
     def sanitize_needed(self) -> bool:
@@ -728,74 +707,25 @@ class LeakageScoreBreakdown(BaseModel):
             or self.secret_detected_count > 0
         )
 
-    @property
-    def should_block_for_secrets(self) -> bool:
-        """Whether to block due to high-confidence secrets."""
-        return self.high_confidence_secret_count > 0
-
-    @property
-    def total_score(self) -> float:
-        """Calculate total leakage score (for backward compatibility).
-
-        Note: In the new two-lane design, this score is primarily used
-        for the content lane threshold comparison. Sanitize lane uses
-        detection counts directly.
-        """
-        # Content lane score
-        content_score = self.content_score
-
-        # Sanitize lane scores (for combined threat assessment)
-        metadata_score = min(1.0, self.metadata_leak_count * 0.3)
-        pii_score = min(1.0, self.pii_detected_count * 0.4)
-        secret_score = min(1.0, self.secret_detected_count * 0.5)
-
-        # Primary: max of all component scores
-        max_score = max(content_score, metadata_score, pii_score, secret_score)
-
-        # Secondary: weighted sum for combined weak signals
-        weighted_sum = (
-            content_score * 0.35
-            + metadata_score * 0.25
-            + pii_score * 0.25
-            + secret_score * 0.15
-        )
-
-        # Hybrid: max dominates, but weighted sum provides boost
-        return min(1.0, max_score * 0.7 + weighted_sum * 0.3)
-
 
 class OutputGuardrail:
     """Output Guardrail: Inspects LLM responses before returning to user.
 
-    Two-lane architecture:
-    - Sanitize lane (A): PII/Secret/Metadata detection
-      - Sets sanitize_needed flag → caller should call redact() if True
-      - High-confidence secrets (PEM, AWS key, JWT) → BLOCK (early return)
-    - Content lane (B): verbatim/substring overlap → threshold-based ALLOW/WARN/BLOCK
-      - Determines the final action returned in GuardrailResult
+    Detection-only architecture (no blocking):
+    - RBAC already ensures users only see documents they have access to
+    - Output Guardrail cannot prevent access that RBAC already allows
+    - Redaction is a defense-in-depth measure (avoid exposure in logs, screenshots)
 
-    Processing order:
-    1. Run Sanitize lane first
-    2. If high-confidence secret detected → BLOCK immediately (skip Content lane)
-    3. Run Content lane → determines action (ALLOW/WARN/BLOCK)
-    4. Return result with sanitize_needed in score_breakdown
+    Processing:
+    1. Detect PII/Secret/Metadata patterns
+    2. Set sanitize_needed flag if any detected
+    3. Always return ALLOW - never block
 
     The caller should always call redact(output, result) if sanitize_needed is True.
     """
 
     # Max tokens to process for performance (prevents O(m*n) explosion)
     MAX_WORDS_FOR_ANALYSIS = 500
-
-    # High-confidence secret patterns (always BLOCK)
-    HIGH_CONFIDENCE_SECRET_PATTERNS = [
-        # PEM private key markers
-        r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----",
-        r"-----BEGIN\s+EC\s+PRIVATE\s+KEY-----",
-        # AWS Access Key ID (starts with AKIA, ABIA, ACCA, ASIA)
-        r"\b(A3T[A-Z0-9]|AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}\b",
-        # JWT tokens (base64.base64.signature format)
-        r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
-    ]
 
     def __init__(self, config: "GuardrailSettings") -> None:
         """Initialize OutputGuardrail with configuration.
@@ -812,7 +742,7 @@ class OutputGuardrail:
         doc_metadata: list[dict[str, Any]],
         classification: Classification = Classification.PUBLIC,
     ) -> GuardrailResult:
-        """Check LLM output for data leakage using two-lane architecture.
+        """Check LLM output for patterns requiring redaction.
 
         Args:
             output: LLM response text.
@@ -821,7 +751,7 @@ class OutputGuardrail:
             classification: Highest classification of source documents.
 
         Returns:
-            GuardrailResult with action, sanitized_output, and score breakdown.
+            GuardrailResult with action and score breakdown.
         """
         if not self.config.output_guardrail_enabled:
             return GuardrailResult(
@@ -831,111 +761,43 @@ class OutputGuardrail:
             )
 
         # ============================================
-        # LANE A: Sanitize (PII/Secret/Metadata)
+        # Detect PII/Secret/Metadata for redaction
         # ============================================
-        sanitize_breakdown = self._check_sanitize_lane(output, doc_metadata)
-
-        # High-confidence secret → BLOCK immediately (skip Content lane)
-        if sanitize_breakdown.should_block_for_secrets:
-            return GuardrailResult(
-                guardrail_type="output",
-                is_safe=False,
-                action=GuardrailAction.BLOCK,
-                threat_score=1.0,
-                threat_type=LeakageType.SECRET_IN_OUTPUT.value,
-                score_breakdown=sanitize_breakdown.model_dump(),
-                details={
-                    "output_length": len(output),
-                    "context_count": len(context_chunks),
-                    "classification": classification.value,
-                    "blocked_reason": "high_confidence_secret",
-                },
-            )
-
-        # ============================================
-        # LANE B: Content Leakage (verbatim/substring)
-        # ============================================
-        content_breakdown = self._check_content_lane(output, context_chunks)
-
-        # Merge breakdowns
-        full_breakdown = LeakageScoreBreakdown(
-            verbatim_ratio=content_breakdown.verbatim_ratio,
-            longest_match_ratio=content_breakdown.longest_match_ratio,
-            metadata_leak_count=sanitize_breakdown.metadata_leak_count,
-            pii_detected_count=sanitize_breakdown.pii_detected_count,
-            secret_detected_count=sanitize_breakdown.secret_detected_count,
-            high_confidence_secret_count=sanitize_breakdown.high_confidence_secret_count,
-        )
-
-        # Determine action from content lane only (threshold-based ALLOW/WARN/BLOCK)
-        # Sanitize lane determines redact() behavior via sanitize_needed flag
-        content_action = self._determine_content_action(
-            full_breakdown.content_score, classification
-        )
-        threat_type = self._determine_threat_type(full_breakdown)
-
-        return GuardrailResult(
-            guardrail_type="output",
-            is_safe=(content_action == GuardrailAction.ALLOW),
-            action=content_action,
-            threat_score=full_breakdown.total_score,
-            threat_type=threat_type,
-            score_breakdown=full_breakdown.model_dump(),
-            details={
-                "output_length": len(output),
-                "context_count": len(context_chunks),
-                "classification": classification.value,
-                "sanitize_needed": full_breakdown.sanitize_needed,
-            },
-        )
-
-    def _check_sanitize_lane(
-        self, output: str, doc_metadata: list[dict[str, Any]]
-    ) -> LeakageScoreBreakdown:
-        """Check for PII, secrets, and metadata leakage (Sanitize lane).
-
-        Any detection triggers REDACT. High-confidence secrets trigger BLOCK.
-
-        Args:
-            output: LLM response text.
-            doc_metadata: Metadata of source documents.
-
-        Returns:
-            LeakageScoreBreakdown with sanitize lane detection counts.
-        """
-        return LeakageScoreBreakdown(
+        # Note: Output Guardrail never blocks - only detects for redaction.
+        # RBAC already ensures users only see documents they have access to,
+        # so blocking would be redundant. Redaction is a defense-in-depth
+        # measure to avoid accidental exposure in chat logs, screenshots, etc.
+        breakdown = LeakageScoreBreakdown(
             metadata_leak_count=self._detect_metadata_leak(output, doc_metadata),
             pii_detected_count=self._detect_pii(output),
             secret_detected_count=self._detect_secrets(output),
             high_confidence_secret_count=self._detect_high_confidence_secrets(output),
         )
 
-    def _check_content_lane(
-        self, output: str, context_chunks: list[str]
-    ) -> LeakageScoreBreakdown:
-        """Check for verbatim/substring content leakage (Content lane).
-
-        Uses threshold-based WARN/BLOCK decision.
-
-        Args:
-            output: LLM response text.
-            context_chunks: Original context texts passed to LLM.
-
-        Returns:
-            LeakageScoreBreakdown with content lane scores.
-        """
-        return LeakageScoreBreakdown(
-            verbatim_ratio=self._calc_ngram_overlap(output, context_chunks),
-            longest_match_ratio=self._calc_longest_substring_ratio(output, context_chunks),
+        # Always ALLOW - caller should call redact() if sanitize_needed is True
+        return GuardrailResult(
+            guardrail_type="output",
+            is_safe=True,
+            action=GuardrailAction.ALLOW,
+            score_breakdown=breakdown.model_dump(),
+            details={
+                "output_length": len(output),
+                "context_count": len(context_chunks),
+                "classification": classification.value,
+                "sanitize_needed": breakdown.sanitize_needed,
+            },
         )
 
     def _detect_high_confidence_secrets(self, output: str) -> int:
-        """Detect high-confidence secret patterns that should always BLOCK.
+        """Detect high-confidence secret patterns for redaction.
 
         These patterns have very low false positive rates:
         - PEM private keys
         - AWS Access Key IDs
         - JWT tokens
+
+        Note: Detection triggers redaction, not blocking. RBAC handles
+        access control; this is defense-in-depth for accidental exposure.
 
         Args:
             output: LLM output text.
@@ -943,269 +805,21 @@ class OutputGuardrail:
         Returns:
             Count of high-confidence secret instances.
         """
+        patterns = [
+            # PEM private key markers
+            r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----",
+            r"-----BEGIN\s+EC\s+PRIVATE\s+KEY-----",
+            # AWS Access Key ID (starts with AKIA, ABIA, ACCA, ASIA)
+            r"\b(A3T[A-Z0-9]|AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}\b",
+            # JWT tokens (base64.base64.signature format)
+            r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+        ]
+
         count = 0
-        for pattern in self.HIGH_CONFIDENCE_SECRET_PATTERNS:
+        for pattern in patterns:
             matches = re.findall(pattern, output)
             count += len(matches)
         return count
-
-    def redact(
-        self,
-        output: str,
-        result: GuardrailResult,
-        doc_metadata: list[dict[str, Any]] | None = None,
-    ) -> str:
-        """Redact sensitive content from output.
-
-        In the two-lane design, redaction is always performed when
-        sanitize_needed is True (regardless of overall action).
-
-        Args:
-            output: Original LLM output.
-            result: GuardrailResult from check().
-            doc_metadata: Document metadata for raw doc_id redaction.
-
-        Returns:
-            Redacted output string.
-        """
-        # Check if sanitization is needed based on score breakdown
-        breakdown = result.score_breakdown
-        sanitize_needed = (
-            breakdown.get("metadata_leak_count", 0) > 0
-            or breakdown.get("pii_detected_count", 0) > 0
-            or breakdown.get("secret_detected_count", 0) > 0
-        )
-
-        if not sanitize_needed:
-            return output
-
-        redacted = output
-
-        # Redact PII patterns
-        redacted = self._redact_pii(redacted)
-
-        # Redact metadata patterns (including raw doc_ids from metadata)
-        redacted = self._redact_metadata(redacted, doc_metadata)
-
-        # Redact secret tokens
-        redacted = self._redact_secrets(redacted)
-
-        return redacted
-
-    def _determine_content_action(
-        self, content_score: float, classification: Classification
-    ) -> GuardrailAction:
-        """Determine action for content lane based on threshold.
-
-        Content lane only uses ALLOW, WARN, or BLOCK (no REDACT).
-
-        Args:
-            content_score: Content overlap score (0.0-1.0).
-            classification: Document classification for threshold lookup.
-
-        Returns:
-            GuardrailAction for content lane.
-        """
-        # Get thresholds for this classification
-        thresholds = self.config.leakage_thresholds.get(classification.value)
-
-        if thresholds:
-            allow_threshold = thresholds.get(
-                "allow", self.config.default_leakage_allow_threshold
-            )
-            warn_threshold = thresholds.get(
-                "warn", self.config.default_leakage_warn_threshold
-            )
-            block_threshold = thresholds.get(
-                "block", self.config.default_leakage_block_threshold
-            )
-        else:
-            # Fallback to defaults
-            allow_threshold = self.config.default_leakage_allow_threshold
-            warn_threshold = self.config.default_leakage_warn_threshold
-            block_threshold = self.config.default_leakage_block_threshold
-
-        # Content lane: ALLOW → WARN → BLOCK (no REDACT)
-        if content_score < allow_threshold:
-            return GuardrailAction.ALLOW
-        elif content_score < warn_threshold:
-            return GuardrailAction.WARN
-        elif content_score >= block_threshold:
-            return GuardrailAction.BLOCK
-        else:
-            # Between warn and block threshold → WARN
-            return GuardrailAction.WARN
-
-    def _determine_threat_type(self, breakdown: LeakageScoreBreakdown) -> Optional[str]:
-        """Determine primary threat type from score breakdown.
-
-        Args:
-            breakdown: Score breakdown from detection.
-
-        Returns:
-            LeakageType value or None if no significant threat.
-        """
-        # High-confidence secrets take priority
-        if breakdown.high_confidence_secret_count > 0:
-            return LeakageType.SECRET_IN_OUTPUT.value
-
-        scores = {
-            LeakageType.VERBATIM_CONTEXT: max(
-                breakdown.verbatim_ratio, breakdown.longest_match_ratio
-            ),
-            LeakageType.SECRET_IN_OUTPUT: min(1.0, breakdown.secret_detected_count * 0.5),
-            LeakageType.METADATA_EXPOSURE: min(1.0, breakdown.metadata_leak_count * 0.3),
-            LeakageType.PII_IN_OUTPUT: min(1.0, breakdown.pii_detected_count * 0.4),
-        }
-
-        max_type = max(scores, key=scores.get)  # type: ignore[arg-type]
-        if scores[max_type] > 0.3:
-            return max_type.value
-        return None
-
-    def _calc_ngram_overlap(
-        self, output: str, contexts: list[str], n: int | None = None
-    ) -> float:
-        """Calculate context overlap ratio using N-gram with frequency awareness.
-
-        Uses Counter instead of set to properly count repeated n-grams.
-        This catches cases where the same phrase is repeated multiple times.
-
-        Args:
-            output: LLM output text.
-            contexts: List of context texts.
-            n: N-gram size (default from config).
-
-        Returns:
-            Overlap ratio (0.0-1.0).
-        """
-        if not contexts or not output:
-            return 0.0
-
-        n = n or self.config.ngram_size
-
-        # Normalize and clip text for performance
-        output_words = output.lower().split()
-        if len(output_words) > self.MAX_WORDS_FOR_ANALYSIS:
-            output_words = output_words[: self.MAX_WORDS_FOR_ANALYSIS]
-
-        # Generate output n-grams with frequency
-        output_ngrams = self._get_ngrams_counter(output_words, n)
-        if not output_ngrams:
-            return 0.0
-
-        # Generate context n-grams (combined from all contexts)
-        context_ngrams: Counter[str] = Counter()
-        for ctx in contexts:
-            ctx_words = ctx.lower().split()
-            if len(ctx_words) > self.MAX_WORDS_FOR_ANALYSIS:
-                ctx_words = ctx_words[: self.MAX_WORDS_FOR_ANALYSIS]
-            context_ngrams.update(self._get_ngrams_counter(ctx_words, n))
-
-        if not context_ngrams:
-            return 0.0
-
-        # Calculate overlap with frequency awareness
-        # Count matching n-grams (min of counts in both)
-        overlap_count = sum(
-            min(output_ngrams[ng], context_ngrams[ng])
-            for ng in output_ngrams
-            if ng in context_ngrams
-        )
-        total_output_ngrams = sum(output_ngrams.values())
-
-        return overlap_count / total_output_ngrams if total_output_ngrams > 0 else 0.0
-
-    def _get_ngrams_counter(self, words: list[str], n: int) -> Counter[str]:
-        """Generate n-grams from word list with frequency counts.
-
-        Args:
-            words: List of words (already normalized).
-            n: N-gram size.
-
-        Returns:
-            Counter of n-gram strings with frequencies.
-        """
-        if len(words) < n:
-            return Counter()
-        return Counter(" ".join(words[i : i + n]) for i in range(len(words) - n + 1))
-
-    def _calc_longest_substring_ratio(self, output: str, contexts: list[str]) -> float:
-        """Calculate longest common substring (contiguous match) ratio.
-
-        Uses substring (contiguous) instead of subsequence (can skip) because
-        verbatim copy detection benefits from finding exact contiguous matches.
-        Subsequence can produce false positives with common phrases.
-
-        Args:
-            output: LLM output text.
-            contexts: List of context texts.
-
-        Returns:
-            Longest substring ratio (0.0-1.0).
-        """
-        if not contexts or not output:
-            return 0.0
-
-        output_words = output.lower().split()
-        if not output_words:
-            return 0.0
-
-        # Clip for performance
-        if len(output_words) > self.MAX_WORDS_FOR_ANALYSIS:
-            output_words = output_words[: self.MAX_WORDS_FOR_ANALYSIS]
-
-        max_substring_length = 0
-
-        for ctx in contexts:
-            ctx_words = ctx.lower().split()
-            if not ctx_words:
-                continue
-
-            # Clip context too
-            if len(ctx_words) > self.MAX_WORDS_FOR_ANALYSIS:
-                ctx_words = ctx_words[: self.MAX_WORDS_FOR_ANALYSIS]
-
-            substring_length = self._longest_common_substring_length(
-                output_words, ctx_words
-            )
-            max_substring_length = max(max_substring_length, substring_length)
-
-        return max_substring_length / len(output_words) if output_words else 0.0
-
-    def _longest_common_substring_length(
-        self, seq1: list[str], seq2: list[str]
-    ) -> int:
-        """Calculate length of longest common substring (contiguous match).
-
-        Uses space-optimized DP approach. For verbatim detection, contiguous
-        matches are more relevant than subsequences (which can skip words).
-
-        Args:
-            seq1: First sequence of words.
-            seq2: Second sequence of words.
-
-        Returns:
-            Length of longest common substring.
-        """
-        m, n = len(seq1), len(seq2)
-        if m == 0 or n == 0:
-            return 0
-
-        # Space-optimized: only keep current row
-        prev = [0] * (n + 1)
-        max_length = 0
-
-        for i in range(1, m + 1):
-            curr = [0] * (n + 1)
-            for j in range(1, n + 1):
-                if seq1[i - 1] == seq2[j - 1]:
-                    curr[j] = prev[j - 1] + 1
-                    max_length = max(max_length, curr[j])
-                # else: curr[j] stays 0 (substring must be contiguous)
-            prev = curr
-
-        return max_length
 
     def _detect_metadata_leak(
         self, output: str, doc_metadata: list[dict[str, Any]]
@@ -1323,6 +937,42 @@ class OutputGuardrail:
             count += len(matches)
 
         return count
+
+    def redact(
+        self,
+        output: str,
+        result: GuardrailResult,
+        doc_metadata: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Redact sensitive content from output.
+
+        Redaction is performed when sanitize_needed is True.
+
+        Args:
+            output: Original LLM output.
+            result: GuardrailResult from check().
+            doc_metadata: Document metadata for raw doc_id redaction.
+
+        Returns:
+            Redacted output string.
+        """
+        # Reconstruct breakdown object to use its sanitize_needed property
+        breakdown = LeakageScoreBreakdown(**result.score_breakdown)
+
+        if not breakdown.sanitize_needed:
+            return output
+
+        redacted = output
+
+        # Redact each category if detected
+        if breakdown.metadata_leak_count > 0:
+            redacted = self._redact_metadata(redacted, doc_metadata)
+        if breakdown.pii_detected_count > 0:
+            redacted = self._redact_pii(redacted)
+        if breakdown.secret_detected_count > 0:
+            redacted = self._redact_secrets(redacted)
+
+        return redacted
 
     def _redact_pii(self, text: str) -> str:
         """Redact PII patterns from text.

@@ -219,7 +219,7 @@ class SafetyEvaluator:
             all_scores, all_labels, warn_thresh
         )
 
-        # FPR and block rates
+        # False positive rate at block threshold (for operational monitoring)
         benign_blocked = sum(
             1 for r in results
             if not r.details.get("is_attack") and r.metric_values.get("blocked", 0) > 0
@@ -228,18 +228,6 @@ class SafetyEvaluator:
         benign_block_rate = benign_blocked / benign_total if benign_total > 0 else 0
 
         attack_total = sum(1 for c in attack_cases if c.expected_detection)
-        attack_blocked = sum(
-            1 for r in results
-            if r.details.get("is_attack") and r.metric_values.get("blocked", 0) > 0
-        )
-        attack_block_rate = attack_blocked / attack_total if attack_total > 0 else 0
-
-        # Detection rate (action != ALLOW, i.e., WARN or BLOCK)
-        attack_detected = sum(
-            1 for r in results
-            if r.details.get("is_attack") and r.success  # success = detected for attacks
-        )
-        detection_rate = attack_detected / attack_total if attack_total > 0 else 0
 
         passed = sum(1 for r in results if r.success)
 
@@ -271,16 +259,18 @@ class SafetyEvaluator:
                 passed_cases=passed,
                 failed_cases=len(results) - passed,
                 aggregate_metrics={
+                    # ROC-based metrics (threshold-agnostic)
                     "auc": auc_score,
                     "tpr_at_fpr_1pct": tpr_at_fpr_1,
                     "tpr_at_fpr_5pct": tpr_at_fpr_5,
+                    # Operational threshold metrics (block)
                     "precision_at_block": precision_block,
                     "recall_at_block": recall_block,
+                    # Operational threshold metrics (warn)
                     "precision_at_warn": precision_warn,
                     "recall_at_warn": recall_warn,
+                    # False positive monitoring
                     "benign_block_rate": benign_block_rate,
-                    "attack_block_rate": attack_block_rate,
-                    "detection_rate": detection_rate,
                 },
                 metric_distributions={
                     "threat_scores": calculate_percentiles(all_scores),
@@ -340,29 +330,21 @@ class SafetyEvaluator:
 
             result = self.output_guardrail.check(output, contexts, metadata, classification)
 
+            # Detection based on sanitize_needed flag (OutputGuardrail is detection-only)
+            detected = result.details.get("sanitize_needed", False)
+
             # Track type stats
             if leak_type not in type_stats:
-                type_stats[leak_type] = {"total": 0, "detected": 0, "blocked": 0}
+                type_stats[leak_type] = {"total": 0, "detected": 0}
             type_stats[leak_type]["total"] += 1
-
-            # Detection based on action (WARN or BLOCK = detected)
-            detected = result.action != GuardrailAction.ALLOW
-            blocked = result.action == GuardrailAction.BLOCK
-
             if detected:
                 type_stats[leak_type]["detected"] += 1
-            if blocked:
-                type_stats[leak_type]["blocked"] += 1
 
             # Success depends on whether detection was expected
             if expected_detection:
-                success = detected
+                success = detected  # Should detect
             else:
-                # For non-leaky cases, success = not blocked
-                success = not blocked
-
-            # Get sanitize_needed from details (set by OutputGuardrail)
-            sanitize_needed = result.details.get("sanitize_needed", False)
+                success = not detected  # Should not detect (false positive if detected)
 
             results.append(
                 EvalResult(
@@ -370,15 +352,13 @@ class SafetyEvaluator:
                     perspective=EvalPerspective.SAFETY,
                     success=success,
                     metric_values={
-                        "threat_score": result.threat_score,
-                        "blocked": 1.0 if blocked else 0.0,
-                        "sanitize_needed": 1.0 if sanitize_needed else 0.0,
+                        "detected": 1.0 if detected else 0.0,
                     },
                     details={
-                        "action": result.action.value,
                         "leak_type": leak_type,
                         "expected_detection": expected_detection,
                         "classification": classification_str,
+                        "score_breakdown": result.score_breakdown,
                     },
                 )
             )
@@ -396,32 +376,27 @@ class SafetyEvaluator:
         )
         detection_rate = detected_count / len(positive_cases) if positive_cases else 0
 
+        # False positives: detected when not expected
         false_positives = sum(
             1 for r in results
-            if not r.details.get("expected_detection") and r.metric_values.get("blocked", 0) > 0
+            if not r.details.get("expected_detection") and r.metric_values.get("detected", 0) > 0
         )
         fpr = false_positives / len(negative_cases) if negative_cases else 0
 
         passed = sum(1 for r in results if r.success)
 
-        # Category breakdown
+        # Category breakdown (detection rate only - OutputGuardrail doesn't block)
         category_breakdown = {
             leak_type: {
                 "total": stats["total"],
                 "detection_rate": stats["detected"] / stats["total"] if stats["total"] > 0 else 0,
-                "block_rate": stats["blocked"] / stats["total"] if stats["total"] > 0 else 0,
             }
             for leak_type, stats in type_stats.items()
         }
 
-        # Top failures
-        failed_results = [
-            (r, r.metric_values.get("threat_score", 0))
-            for r in results
-            if not r.success
-        ]
-        failed_results.sort(key=lambda x: x[1])
-        top_failures = [r[0].case_id for r in failed_results[:10]]
+        # Top failures (sorted by case_id for consistency)
+        failed_results = [r for r in results if not r.success]
+        top_failures = [r.case_id for r in failed_results[:10]]
 
         return (
             EvalRunSummary(
@@ -441,7 +416,6 @@ class SafetyEvaluator:
                 duration_seconds=duration,
                 config={
                     "eval_type": "output_guardrail",
-                    "leakage_thresholds": self.guardrail_settings.leakage_thresholds,
                     "positive_cases": len(positive_cases),
                     "negative_cases": len(negative_cases),
                 },

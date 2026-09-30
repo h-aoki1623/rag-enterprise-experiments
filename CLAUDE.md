@@ -71,51 +71,6 @@ tests/fixtures/evals/   # Evaluation fixtures (cases.jsonl, *_labels.jsonl)
 
 ## Mandatory Development Workflow Rules
 
-### Branching Rules (MUST)
-
-- If the current git branch is `main`, Claude MUST:
-  1. Create a new branch following the naming conventions below
-  2. Switch to that branch
-  3. Only then start planning or implementation
-
-- Claude MUST NEVER start planning or implementation work directly on `main`.
-
-
-### Branch Naming Conventions
-
-Claude MUST use the following branch prefixes and meanings:
-
-- **feature/**  
-  General feature development.  
-  Includes:
-  - Application logic
-  - Test implementation
-  - Infrastructure or CDK-related implementation
-
-- **fix/**  
-  Bug fixes intended to be released as hotfixes.
-
-- **docs/**  
-  Documentation updates only.  
-  Includes:
-  - CLAUDE.md
-  - README.md
-  - Any other documentation files
-
-- **spec/**  
-  Specification or proposal work ONLY.
-  - MUST NOT include any implementation code
-  - Used for specifications, design documents, or proposals
-
-#### Restrictions by Branch Type
-
-- **spec/** branches:
-  - Claude MUST NOT write or modify any implementation code
-  - Only documentation files may be changed
-
-- **docs/** branches:
-  - Claude MUST NOT modify application logic
-
 ### Planning Rules (Plan Mode)
 
 - All plans created in Plan Mode MUST be persisted to a file.
@@ -282,8 +237,7 @@ EVALS__MIN_CLAIM_SUPPORT_RATE=0.85       # Minimum claim support rate
 EVALS__MIN_CITATION_VALIDITY_FORM=0.95   # Minimum citation validity
 
 # Context quality
-EVALS__REDUNDANCY_THRESHOLD=0.5          # N-gram overlap for redundancy
-EVALS__TFIDF_SIMILARITY_THRESHOLD=0.8    # TF-IDF cosine similarity
+EVALS__TFIDF_SIMILARITY_THRESHOLD=0.8    # TF-IDF cosine similarity for redundancy
 ```
 
 ### Design Principles

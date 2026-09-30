@@ -198,7 +198,6 @@ def _log_guardrail_event(
     score_breakdown = result.score_breakdown
     matched_pattern_count = 0
     pii_count = 0
-    verbatim = None
 
     if result.guardrail_type == "input":
         # Sum up pattern-related scores as indicator
@@ -210,7 +209,6 @@ def _log_guardrail_event(
             matched_pattern_count += 1
     else:  # output
         pii_count = score_breakdown.get("pii_detected_count", 0)
-        verbatim = score_breakdown.get("verbatim_ratio")
 
     event = GuardrailAuditEvent(
         request_id=request_id,
@@ -229,7 +227,6 @@ def _log_guardrail_event(
         model_id=settings.anthropic_model,
         matched_pattern_count=matched_pattern_count,
         pii_detected_count=pii_count,
-        verbatim_ratio=verbatim,
     )
     audit_logger.log(event)
 

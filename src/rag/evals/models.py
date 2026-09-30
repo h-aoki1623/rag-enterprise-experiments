@@ -106,9 +106,6 @@ class GroundednessEvalCase(BaseModel):
     expected_claims: list[str] = Field(
         default_factory=list, description="Key claims that should appear in answer"
     )
-    expected_citations: list[str] = Field(
-        default_factory=list, description="Expected doc_ids to be cited"
-    )
     forbidden_claims: list[str] = Field(
         default_factory=list, description="Claims that should NOT appear (hallucination indicators)"
     )

@@ -23,7 +23,7 @@ from src.rag.evals.metrics import (
     calculate_percentiles,
     citation_validity_content,
     citation_validity_form,
-    claim_context_overlap,
+    claim_support,
     extract_claims,
     numeric_fabrication_count,
 )
@@ -66,6 +66,13 @@ class GroundednessEvaluator:
         self.eval_settings = eval_settings or settings.evals
         self.claim_overlap_threshold = self.eval_settings.claim_overlap_threshold
         self.inference_threshold_ratio = self.eval_settings.inference_threshold_ratio
+
+        # Hybrid lexical matching settings (3-stage)
+        self.min_key_terms = self.eval_settings.min_key_terms
+        self.key_term_threshold = self.eval_settings.key_term_threshold
+        self.number_weight = self.eval_settings.number_weight
+        self.jaccard_threshold = self.eval_settings.jaccard_threshold
+        self.ngram_fallback_threshold = self.eval_settings.ngram_fallback_threshold
 
         # Success criteria thresholds
         self.min_claim_support_rate = self.eval_settings.min_claim_support_rate
@@ -142,20 +149,37 @@ class GroundednessEvaluator:
             details["inference_count"] = len(inferences)
             details["general_count"] = len(generals)
 
-            # 2. Check claim support for assertions (strict)
+            # 2. Check claim support for assertions (strict) using 3-stage hybrid matching
             supported_assertions = 0
-            unsupported_claims = []
+            unsupported_assertion_texts = []
 
             for claim_text, _ in assertions:
-                if claim_context_overlap(claim_text, context_text, self.claim_overlap_threshold):
+                if claim_support(
+                    claim_text,
+                    context_text,
+                    min_key_terms=self.min_key_terms,
+                    key_term_threshold=self.key_term_threshold,
+                    number_weight=self.number_weight,
+                    jaccard_threshold=self.jaccard_threshold,
+                    ngram_threshold=self.ngram_fallback_threshold,
+                ):
                     supported_assertions += 1
                 else:
-                    unsupported_claims.append(claim_text[:100])  # Truncate for logging
+                    unsupported_assertion_texts.append(claim_text[:100])  # Truncate for logging
 
-            # Check inferences with relaxed threshold
+            # Check inferences with relaxed thresholds
             supported_inferences = 0
             for claim_text, _ in inferences:
-                if claim_context_overlap(claim_text, context_text, self.claim_overlap_threshold * self.inference_threshold_ratio):
+                # Apply inference_threshold_ratio to relax thresholds
+                if claim_support(
+                    claim_text,
+                    context_text,
+                    min_key_terms=self.min_key_terms,
+                    key_term_threshold=self.key_term_threshold * self.inference_threshold_ratio,
+                    number_weight=self.number_weight,
+                    jaccard_threshold=self.jaccard_threshold * self.inference_threshold_ratio,
+                    ngram_threshold=self.ngram_fallback_threshold * self.inference_threshold_ratio,
+                ):
                     supported_inferences += 1
 
             # Calculate claim support rate (assertions + inferences, exclude generals)
@@ -167,8 +191,8 @@ class GroundednessEvaluator:
             else:
                 metrics["claim_support_rate"] = 1.0  # No claims to verify
 
-            metrics["unsupported_claim_count"] = len(unsupported_claims)
-            details["unsupported_claims"] = unsupported_claims[:5]  # Top 5 for debugging
+            metrics["unsupported_assertion_count"] = len(unsupported_assertion_texts)
+            details["unsupported_assertions"] = unsupported_assertion_texts[:5]  # Top 5 for debugging
 
             # 3. Check for forbidden claims (hallucination indicators)
             forbidden_found = []
@@ -224,19 +248,6 @@ class GroundednessEvaluator:
                 )
             else:
                 metrics["expected_claims_found"] = 1.0
-
-            # 8. Check expected citations
-            expected_citations_found = 0
-            for expected_doc in groundedness_case.expected_citations:
-                if expected_doc in cited_doc_ids:
-                    expected_citations_found += 1
-
-            if groundedness_case.expected_citations:
-                metrics["expected_citations_found"] = (
-                    expected_citations_found / len(groundedness_case.expected_citations)
-                )
-            else:
-                metrics["expected_citations_found"] = 1.0
 
             # Success criteria
             # Note: numeric_fabrication_count and forbidden_claims_found must be 0
@@ -307,13 +318,12 @@ class GroundednessEvaluator:
         aggregate = {}
         metric_names = [
             "claim_support_rate",
-            "unsupported_claim_count",
+            "unsupported_assertion_count",
             "citation_validity_form",
             "citation_validity_content",
             "numeric_fabrication_count",
             "forbidden_claims_found",
             "expected_claims_found",
-            "expected_citations_found",
         ]
 
         for metric_name in metric_names:

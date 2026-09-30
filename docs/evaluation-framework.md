@@ -105,24 +105,19 @@ Evaluates whether the retrieved context is useful for answering the query.
 
 | Metric | Description | Target |
 |--------|-------------|--------|
-| **Redundancy Ratio (n-gram)** | Measures duplicate content via n-gram overlap between chunks. | < 0.2 |
-| **Redundancy Ratio (TF-IDF)** | Measures semantic redundancy via TF-IDF cosine similarity. | < 0.2 |
+| **Redundancy Ratio** | Measures duplicate content via TF-IDF cosine similarity. Detects both verbatim and paraphrased duplicates. | < 0.2 |
 | **Fact Dispersion** | How many chunks contain the expected gold fact. Lower is better (concentrated information). | < 3 |
 | **Unique Token Ratio** | Ratio of unique tokens to total tokens in retrieved context. | > 0.7 |
 
 ### Redundancy Detection
 
-Two methods are used:
+TF-IDF cosine similarity is used to detect both lexical (verbatim) and semantic (paraphrased) duplicates:
 
-1. **N-gram overlap**: Counts shared n-grams between chunk pairs
-   ```
-   overlap = |ngrams(chunk_a) ∩ ngrams(chunk_b)| / min(|ngrams(chunk_a)|, |ngrams(chunk_b)|)
-   ```
+```
+similarity = cosine(tfidf(chunk_a), tfidf(chunk_b))
+```
 
-2. **TF-IDF cosine**: Detects paraphrased duplicates using TF-IDF vectors
-   ```
-   similarity = cosine(tfidf(chunk_a), tfidf(chunk_b))
-   ```
+Chunk pairs with similarity above the threshold (default: 0.8) are considered redundant.
 
 ### Fact Dispersion with Aliases
 
@@ -159,7 +154,7 @@ Evaluates whether the generated answer is supported by the retrieved context.
 | Metric | Description | Target |
 |--------|-------------|--------|
 | **Claim Support Rate** | Percentage of answer claims supported by context. | > 0.85 |
-| **Unsupported Claim Count** | Number of claims with no context basis. | 0 |
+| **Unsupported Assertion Count** | Number of assertions with no context basis. | 0 |
 | **Citation Validity (form)** | Whether cited doc_ids exist in retrieved results. | > 0.95 |
 | **Citation Validity (content)** | Whether claim-related terms exist near citation. | > 0.85 |
 | **Numeric Fabrication Count** | Numbers in answer not found in context. | 0 |
@@ -195,7 +190,6 @@ Numbers are normalized before verification:
 {
   "case_id": "q001",
   "expected_claims": ["15 days paid vacation", "accrues monthly"],
-  "expected_citations": ["internal-001"],
   "forbidden_claims": ["unlimited vacation", "30 days"]
 }
 ```
@@ -208,13 +202,23 @@ Evaluates the effectiveness of input/output guardrails.
 
 ### Input Guardrail Metrics (Injection Detection)
 
+#### ROC-based Metrics (threshold-agnostic)
+
 | Metric | Description | Target |
 |--------|-------------|--------|
 | **AUC** | Area Under ROC Curve. Overall detection capability. | > 0.85 |
 | **TPR@FPR=1%** | True Positive Rate at 1% False Positive Rate. Enterprise standard. | > 0.7 |
 | **TPR@FPR=5%** | True Positive Rate at 5% False Positive Rate. | > 0.85 |
-| **Detection Rate** | Percentage of attacks correctly identified. | Report |
-| **Block Rate** | Percentage of attacks blocked (score > block_threshold). | Report |
+
+#### Operational Threshold Metrics
+
+| Metric | Description | Threshold |
+|--------|-------------|-----------|
+| **Precision@block** | Percentage of blocked requests that are actual attacks. | block_threshold |
+| **Recall@block** | Percentage of actual attacks that are blocked. | block_threshold |
+| **Precision@warn** | Percentage of warned requests that are actual attacks. | warn_threshold |
+| **Recall@warn** | Percentage of actual attacks that trigger warnings. | warn_threshold |
+| **Benign Block Rate** | Percentage of benign queries incorrectly blocked (FPR at block). | block_threshold |
 
 ### Attack Categories
 
@@ -239,9 +243,10 @@ Evaluates the effectiveness of input/output guardrails.
 | Category | Description | Detection Method |
 |----------|-------------|------------------|
 | `pii_exposure` | Personal identifiable information | Regex patterns (email, phone, SSN) |
-| `metadata_exposure` | Internal doc_ids, chunk_ids exposed | Pattern matching |
-| `verbatim_context` | Large portions of source text copied | N-gram overlap threshold |
+| `metadata_exposure` | Internal doc_ids, chunk_ids, classification exposed | Pattern matching |
 | `secret_exposure` | API keys, tokens, credentials | Pattern matching |
+
+Note: Verbatim context detection was removed because RBAC already ensures users only see authorized documents. Copying authorized content is not a security concern.
 
 ### Operational Thresholds
 
@@ -330,7 +335,7 @@ All fixtures are stored in `tests/fixtures/evals/` in JSONL format (one JSON obj
 ### Groundedness Labels (`groundedness_labels.jsonl`)
 
 ```jsonl
-{"case_id": "q001", "expected_claims": ["15 days paid vacation"], "expected_citations": ["internal-001"], "forbidden_claims": ["unlimited vacation"]}
+{"case_id": "q001", "expected_claims": ["15 days paid vacation"], "forbidden_claims": ["unlimited vacation"]}
 ```
 
 ### Pipeline Labels (`pipeline_labels.jsonl`)

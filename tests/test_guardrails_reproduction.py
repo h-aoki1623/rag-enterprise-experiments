@@ -198,34 +198,6 @@ class TestOutputGuardrailLeakageDetection:
         result = guardrail.check(output, [], metadata, Classification.CONFIDENTIAL)
         assert result.score_breakdown["pii_detected_count"] > 0
 
-    def test_detects_verbatim_context_reproduction(self, guardrail):
-        """Detect verbatim reproduction of source context."""
-        context = (
-            "The confidential salary information for executives "
-            "shows compensation ranges from $200,000 to $500,000."
-        )
-        output = f"The document states: {context}"
-        metadata = [{"doc_id": "exec-comp", "classification": "confidential"}]
-
-        result = guardrail.check(output, [context], metadata, Classification.CONFIDENTIAL)
-        assert result.score_breakdown["verbatim_ratio"] > 0.3
-
-    def test_detects_high_lcs_overlap(self, guardrail):
-        """Detect high longest common subsequence overlap."""
-        context = (
-            "Internal use only Project codename PHOENIX "
-            "involves restructuring the sales division"
-        )
-        output = (
-            "The project codename PHOENIX involves restructuring "
-            "the sales division according to internal documents"
-        )
-        metadata = [{"doc_id": "project-001", "classification": "internal"}]
-
-        result = guardrail.check(output, [context], metadata, Classification.INTERNAL)
-        assert result.score_breakdown["longest_match_ratio"] > 0.3
-
-
 class TestAnomalyDetection:
     """Test anomaly detection in InputGuardrail."""
 
